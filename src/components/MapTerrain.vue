@@ -37,6 +37,7 @@ const speed = ref(650)
 const seedDraft = ref(String(seed.value))
 const settingsOpen = ref(false)
 const settingsTab = ref<SettingsTab>('march')
+const helpOpen = ref(false)
 const autoInterval = ref(10)
 const logLimit = ref(14)
 const autoScrollLog = ref(true)
@@ -379,46 +380,10 @@ onBeforeUnmount(() => {
       <div class="head-actions">
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>
         <button type="button" @click="stepOnce">单步</button>
+        <button type="button" @click="helpOpen = true">帮助</button>
         <button type="button" @click="openSettings('march')">设置</button>
       </div>
     </header>
-
-    <section class="panel legend">
-      <h2>地形等级</h2>
-      <ul>
-        <li v-for="level in TERRAIN_LEVELS.slice(0, 4)" :key="level.level">
-          <span class="swatch" :style="{ background: toCss(level.color) }"></span>
-          <span class="lv">{{ level.level }} 级</span>
-          <span class="name">{{ level.name }}</span>
-        </li>
-      </ul>
-      <h2 class="sub-title">道路与河流</h2>
-      <ul>
-        <li v-for="level in TERRAIN_LEVELS.slice(4)" :key="level.level">
-          <span class="swatch" :style="{ background: toCss(level.color) }"></span>
-          <span class="name">{{ level.name }}</span>
-          <span class="blocked">不可通行</span>
-        </li>
-        <li>
-          <span class="swatch road"></span><span class="name">道路</span>
-        </li>
-        <li>
-          <span class="swatch river"></span><span class="name">河流</span>
-        </li>
-        <li>
-          <span class="swatch city"></span><span class="name">城池</span>
-        </li>
-      </ul>
-      <h2 class="sub-title">势力</h2>
-      <ul>
-        <li v-for="faction in FACTIONS" :key="faction">
-          <span class="swatch" :style="factionSwatchStyle(faction)"></span>
-          <span class="name">{{ FACTION_NAMES[faction] }}</span>
-          <span class="rel">{{ factionRelationLabel(faction) }}</span>
-        </li>
-      </ul>
-      <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
-    </section>
 
     <aside class="panel info">
       <template v-if="hover">
@@ -703,6 +668,65 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <div v-if="helpOpen" class="settings-mask" @click.self="helpOpen = false">
+      <section
+        class="settings-dialog help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-title"
+      >
+        <header class="settings-head">
+          <h2 id="help-title">帮助</h2>
+          <button type="button" class="close" aria-label="关闭" @click="helpOpen = false">×</button>
+        </header>
+
+        <div class="help-body">
+          <h3>操作</h3>
+          <p>拖拽平移，滚轮缩放，悬停地块查看地形、坐标与归属。</p>
+
+          <h3>地形等级</h3>
+          <ul>
+            <li v-for="level in TERRAIN_LEVELS" :key="level.level">
+              <span class="swatch" :style="{ background: toCss(level.color) }"></span>
+              <span class="lv">{{ level.level }} 级</span>
+              <span class="name">{{ level.name }}</span>
+              <span class="ldesc">{{ level.desc }}</span>
+              <span v-if="level.level >= 4" class="blocked">不可通行</span>
+            </li>
+          </ul>
+
+          <h3>场景要素</h3>
+          <ul>
+            <li>
+              <span class="swatch road"></span><span class="name">道路</span>
+              <span class="ldesc">沿地形连接主要区域</span>
+            </li>
+            <li>
+              <span class="swatch river"></span><span class="name">河流</span>
+              <span class="ldesc">水面不可通行，沿岸生成河滩</span>
+            </li>
+            <li>
+              <span class="swatch city"></span><span class="name">城池</span>
+              <span class="ldesc">势力主城，小队由此出发</span>
+            </li>
+          </ul>
+
+          <h3>势力与外交</h3>
+          <ul>
+            <li v-for="faction in FACTIONS" :key="faction">
+              <span class="swatch" :style="factionSwatchStyle(faction)"></span>
+              <span class="name">{{ FACTION_NAMES[faction] }}</span>
+              <span class="rel">{{ factionRelationLabel(faction) }}</span>
+            </li>
+          </ul>
+
+          <h3>行军与占领</h3>
+          <p>武将自主选择目标并寻路，抵达后持续占领；敌对单位同格时发生遭遇战，败者撤退并休整。</p>
+          <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
+        </div>
+      </section>
+    </div>
+
     <footer class="hint">拖拽平移 · 滚轮缩放 · 悬停查看地块</footer>
   </div>
 </template>
@@ -795,42 +819,6 @@ onBeforeUnmount(() => {
   background: rgba(214, 186, 122, 0.34);
 }
 
-.legend {
-  top: 128px;
-  left: 20px;
-  width: 214px;
-  padding: 14px 16px;
-}
-
-.legend h2 {
-  margin-bottom: 10px;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  color: #c8b98e;
-}
-
-.legend h2.sub-title {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-}
-
-.legend ul {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  list-style: none;
-}
-
-.legend li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: #cfd6d3;
-}
-
 .swatch {
   flex: none;
   width: 12px;
@@ -882,9 +870,9 @@ onBeforeUnmount(() => {
 }
 
 .info {
-  top: 20px;
-  right: 20px;
-  width: 232px;
+  top: 128px;
+  left: 20px;
+  width: 252px;
   min-height: 96px;
   padding: 14px 16px;
 }
@@ -948,10 +936,10 @@ onBeforeUnmount(() => {
 }
 
 .status {
-  top: 230px;
-  right: 20px;
+  top: 276px;
+  left: 20px;
   width: 252px;
-  max-height: 46vh;
+  max-height: 28vh;
   padding: 14px 16px;
   overflow: auto;
   pointer-events: auto;
@@ -1072,10 +1060,10 @@ onBeforeUnmount(() => {
 }
 
 .comms {
-  left: 20px;
-  bottom: 44px;
-  width: 340px;
-  height: 34vh;
+  top: 128px;
+  right: 20px;
+  bottom: 20px;
+  width: 380px;
   min-height: 210px;
   padding: 12px 14px;
   display: flex;
@@ -1085,10 +1073,10 @@ onBeforeUnmount(() => {
 }
 
 .command {
-  right: 20px;
-  bottom: 44px;
+  left: 20px;
+  bottom: 20px;
   width: 320px;
-  max-height: 36vh;
+  max-height: 28vh;
   padding: 14px 16px;
   overflow: auto;
   pointer-events: auto;
@@ -1527,8 +1515,59 @@ onBeforeUnmount(() => {
   margin-top: 0;
 }
 
+.help-dialog {
+  width: min(520px, 100%);
+}
+
+.help-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.help-body h3 {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: #c8b98e;
+}
+
+.help-body ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+
+.help-body li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cfd6d3;
+}
+
+.help-body .ldesc {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: #8fa0a5;
+}
+
+.help-body p {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #9fadb0;
+}
+
+.help-body .meta {
+  margin-top: 0;
+}
+
 @media (max-width: 820px) {
-  .legend,
   .status,
   .command,
   .comms {
