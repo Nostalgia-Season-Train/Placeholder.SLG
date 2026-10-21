@@ -1,7 +1,7 @@
 /**
- * Faction chat: a world channel shared by every faction agent and an alliance channel
+ * Faction chat: a world channel shared by every faction AI and an alliance channel
  * dedicated to the player's own faction. With an LLM client the replies come from the
- * model; otherwise a local line generator keeps both channels alive.
+ * model; otherwise the simulated AI keeps both channels alive.
  */
 import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
 import { FACTIONS, FACTION_NAMES, type Faction, type SimSnapshot } from '../bot/types'
@@ -22,10 +22,10 @@ export interface ChatMessage {
 
 const MAX_MESSAGES = 160
 
-const ALLIANCE_PROMPT = `你是本方阵营的指挥 Agent，用简短中文回答主将的问题，给出战况判断和行动建议。
+const ALLIANCE_PROMPT = `你是本方阵营的 AI 决策层，用简短中文回答主将的问题，给出战况判断和行动建议。
 要求：不超过 60 字；不要输出 Markdown；只依据给出的战场数据，不编造坐标。`
 
-const WORLD_PROMPT = `你是本方阵营的指挥 Agent，在世界频道向其他阵营发一条简短战报或宣言。
+const WORLD_PROMPT = `你是本方阵营的 AI 决策层，在世界频道向其他阵营发一条简短战报或宣言。
 要求：不超过 30 字；态度符合本方立场；不要输出 Markdown；不要编造数据。`
 
 export class WarChat {
@@ -53,15 +53,15 @@ export class WarChat {
       channel: 'world',
       faction: null,
       author: '系统',
-      text: '世界频道已接入三方 Agent。',
+      text: '世界频道已接入三方 AI。',
       round,
       source: 'system',
     })
     this.push({
       channel: 'alliance',
       faction,
-      author: `${FACTION_NAMES[faction]} Agent`,
-      text: '同盟频道已建立，随时向我询问战况或请求建议。',
+      author: `${FACTION_NAMES[faction]} AI`,
+      text: '同盟频道已建立，可直接下发指令或询问战况。',
       round,
       source: 'system',
     })
@@ -74,14 +74,7 @@ export class WarChat {
     faction: Faction,
     snapshot: SimSnapshot,
   ): Promise<void> {
-    this.push({
-      channel,
-      faction,
-      author: '你',
-      text,
-      round: snapshot.round,
-      source: 'player',
-    })
+    this.postPlayer(channel, text, faction, snapshot.round)
 
     if (channel === 'alliance') {
       await this.reply(faction, snapshot, text, 'alliance', true)
@@ -93,7 +86,23 @@ export class WarChat {
     await this.reply(responder, snapshot, text, 'world', false)
   }
 
-  /** Periodic world broadcast from one faction agent */
+  /** Add the player's own line without generating a reply */
+  postPlayer(channel: ChatChannel, text: string, faction: Faction, round: number): void {
+    this.push({ channel, faction, author: '你', text, round, source: 'player' })
+  }
+
+  /** Add an AI line when the decision layer already produced the reply */
+  postAgent(
+    channel: ChatChannel,
+    faction: Faction,
+    text: string,
+    round: number,
+    source: 'llm' | 'mock',
+  ): void {
+    this.push({ channel, faction, author: `${FACTION_NAMES[faction]} AI`, text, round, source })
+  }
+
+  /** Periodic world broadcast from one faction AI */
   async broadcast(faction: Faction, snapshot: SimSnapshot): Promise<void> {
     await this.reply(faction, snapshot, '', 'world', false)
   }
@@ -115,7 +124,7 @@ export class WarChat {
           this.push({
             channel,
             faction,
-            author: `${FACTION_NAMES[faction]} Agent`,
+            author: `${FACTION_NAMES[faction]} AI`,
             text: clean,
             round: snapshot.round,
             source: 'llm',
@@ -130,7 +139,7 @@ export class WarChat {
     this.push({
       channel,
       faction,
-      author: `${FACTION_NAMES[faction]} Agent`,
+      author: `${FACTION_NAMES[faction]} AI`,
       text: answerPlayer
         ? this.localAdvice(faction, snapshot)
         : this.localBroadcast(faction, snapshot),

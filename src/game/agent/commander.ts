@@ -49,7 +49,7 @@ const STANCE_LABELS: Record<BotStance, string> = {
 
 const VALID_STANCES: BotStance[] = ['auto', 'attack', 'defend', 'hold', 'retreat']
 
-const SYSTEM_PROMPT = `你是即时战略游戏中的指挥 Agent，负责把玩家指令翻译成指定阵营 Bot 的行动命令。
+const SYSTEM_PROMPT = `你是即时战略游戏中的 AI 决策层，负责把玩家指令翻译成指定阵营 Bot（武将行动层）的行动命令。
 
 规则：
 1. 只能指挥 directive 所属阵营的 Bot，generalId 必须来自 generals 列表。
@@ -323,7 +323,7 @@ export class CommanderAgent {
     const assigned = orders.filter((order) => order.target).length
     return {
       faction,
-      reply: `${FACTION_NAMES[faction]} Agent（本地解析）：${STANCE_LABELS[stance]}，已向 ${assigned} 个 Bot 下达指令。`,
+      reply: `${FACTION_NAMES[faction]} AI（模拟）：${STANCE_LABELS[stance]}，已向 ${assigned} 个 Bot 下达指令。`,
       source: 'mock',
       orders,
       error: null,

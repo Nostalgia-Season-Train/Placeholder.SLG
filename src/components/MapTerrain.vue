@@ -7,12 +7,11 @@ import {
   FACTION_COLORS,
   FACTIONS,
   FACTION_NAMES,
-  ORDER_LABELS,
   STATUS_LABELS,
   type Faction,
   type SimSnapshot,
 } from '@/game/bot/types'
-import { CommanderAgent, type AgentDecision } from '@/game/agent/commander'
+import { CommanderAgent } from '@/game/agent/commander'
 import { WarChat, type ChatMessage } from '@/game/agent/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 import {
@@ -44,10 +43,8 @@ const autoScrollLog = ref(true)
 const logList = ref<HTMLUListElement | null>(null)
 const agent = shallowRef<CommanderAgent | null>(null)
 const agentFaction = ref<Faction>('red')
-const directive = ref('向北推进，夺取价值高的地块')
 const agentBusy = ref(false)
-const agentDecisions = ref<AgentDecision[]>([])
-const autoCommand = ref(false)
+const autoCommand = ref(true)
 const llmConfig = ref<LlmConfig>(loadLlmConfig())
 const llmReady = computed(() => isLlmConfigured(llmConfig.value))
 const chat = shallowRef<WarChat | null>(null)
@@ -112,11 +109,7 @@ function captureWidth(progress: number, cost: number): string {
   return `${Math.min(100, Math.round((progress / Math.max(1, cost)) * 100))}%`
 }
 
-const factionGenerals = computed(() =>
-  generalRows.value.filter((general) => general.faction === agentFaction.value),
-)
-
-const agentSourceLabel = computed(() => (llmReady.value ? 'LLM' : '本地解析'))
+const aiModeLabel = computed(() => (llmReady.value ? 'LLM' : '模拟 AI'))
 
 const chatMessages = computed<ChatMessage[]>(() => {
   chatTick.value
@@ -127,15 +120,11 @@ const chatMessages = computed<ChatMessage[]>(() => {
 })
 
 const chatPlaceholder = computed(() =>
-  chatTab.value === 'world' ? '向世界频道发言（所有 LLM）' : '向本方 LLM 询问或下令',
+  chatTab.value === 'world' ? '向世界频道发言（所有 AI）' : '向本方 AI 询问或下令',
 )
 
-function orderLabel(stance: string | undefined): string {
-  return stance ? ORDER_LABELS[stance as keyof typeof ORDER_LABELS] ?? stance : '—'
-}
-
 /* ------------------------------------------------------------------ */
-/* Agent                                                               */
+/* AI                                                                  */
 /* ------------------------------------------------------------------ */
 
 function createLlmClient() {
@@ -166,7 +155,6 @@ async function issueDirective(text: string): Promise<void> {
         issuedRound: round,
       })
     }
-    agentDecisions.value = [decision, ...agentDecisions.value].slice(0, 6)
     syncSnapshot()
   } finally {
     agentBusy.value = false
@@ -187,6 +175,7 @@ function maybeAutoCommand(): void {
 async function sendChat(): Promise<void> {
   const panel = chat.value
   const engine = simulation.value
+  const commander = agent.value
   const channel = chatTab.value
   const text = chatDraft.value.trim()
   if (!panel || !engine || !text || chatBusy.value || channel === 'log') return
@@ -194,7 +183,29 @@ async function sendChat(): Promise<void> {
   chatDraft.value = ''
   chatBusy.value = true
   try {
-    await panel.post(channel, text, agentFaction.value, engine.snapshot())
+    const current = engine.snapshot()
+    if (channel === 'alliance' && commander && !agentBusy.value) {
+      panel.postPlayer('alliance', text, agentFaction.value, current.round)
+      agentBusy.value = true
+      try {
+        const decision = await commander.decide(text, agentFaction.value, current)
+        for (const order of decision.orders) {
+          engine.setOrder(order.generalId, {
+            stance: order.stance,
+            target: order.target,
+            note: order.reason,
+            issuedRound: current.round,
+          })
+        }
+        panel.postAgent('alliance', agentFaction.value, decision.reply, current.round, decision.source)
+      } finally {
+        agentBusy.value = false
+      }
+      syncSnapshot()
+      return
+    }
+
+    await panel.post(channel, text, agentFaction.value, current)
   } finally {
     chatBusy.value = false
     chatTick.value += 1
@@ -239,7 +250,6 @@ function initSimulation(): void {
   panel.welcome(agentFaction.value, 0)
   chat.value = panel
   chatTick.value += 1
-  agentDecisions.value = []
   lastAutoRound = 0
   lastWorldChatRound = 0
   worldChatIndex = 0
@@ -450,60 +460,11 @@ onBeforeUnmount(() => {
       </ul>
     </section>
 
-    <section class="panel command">
-      <h2>指挥 Agent</h2>
-      <div class="cmd-row">
-        <select v-model="agentFaction">
-          <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
-        </select>
-        <span class="src-badge" :class="{ live: llmReady }">{{ agentSourceLabel }}</span>
-      </div>
-
-      <div class="cmd-input">
-        <input
-          v-model="directive"
-          type="text"
-          placeholder="例：向北推进，夺取道路两侧地块"
-          @keyup.enter="issueDirective(directive)"
-        />
-        <button type="button" :disabled="agentBusy" @click="issueDirective(directive)">
-          {{ agentBusy ? '思考中' : '下达' }}
-        </button>
-      </div>
-
-      <label class="auto-line">
-        <input v-model="autoCommand" type="checkbox" />
-        每 {{ autoInterval }} 回合自动指挥
-      </label>
-
-      <ul class="agent-bots">
-        <li v-for="g in factionGenerals" :key="g.id">
-          <span class="dot small" :style="{ background: factionColorCss(g.faction) }"></span>
-          <span class="rname">{{ g.name }}</span>
-          <span class="rgoal">{{ orderLabel(g.order?.stance) }}</span>
-          <span class="rgoal">{{ g.target ? `${g.target.q},${g.target.r}` : '—' }}</span>
-        </li>
-      </ul>
-
-      <button type="button" class="link-btn settings-link" @click="openSettings('llm')">
-        LLM 与推演设置
-      </button>
-
-      <ul class="agent-log">
-        <li v-for="(d, i) in agentDecisions" :key="i">
-          <span class="src-badge" :class="{ live: d.source === 'llm' }">
-            {{ d.source === 'llm' ? 'LLM' : 'Mock' }}
-          </span>
-          <span class="dtext">
-            {{ d.reply }}
-            <em v-if="d.error">{{ d.error }}</em>
-          </span>
-        </li>
-      </ul>
-    </section>
-
     <section class="panel comms">
-      <h2>通讯</h2>
+      <div class="comms-head">
+        <h2>通讯</h2>
+        <span class="src-badge" :class="{ live: llmReady }">{{ aiModeLabel }}</span>
+      </div>
 
       <div class="tabs">
         <button
@@ -599,6 +560,12 @@ onBeforeUnmount(() => {
 
         <div v-if="settingsTab === 'march'" class="settings-body">
           <label class="field">
+            <span>当前势力</span>
+            <select v-model="agentFaction">
+              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
+            </select>
+          </label>
+          <label class="field">
             <span>推演速度</span>
             <select v-model.number="speed" @change="onSpeedChange">
               <option :value="1100">慢</option>
@@ -606,8 +573,12 @@ onBeforeUnmount(() => {
               <option :value="350">快</option>
             </select>
           </label>
+          <label class="field check">
+            <span>启用自动决策</span>
+            <input v-model="autoCommand" type="checkbox" />
+          </label>
           <label class="field">
-            <span>自动指挥</span>
+            <span>决策间隔</span>
             <select v-model.number="autoInterval">
               <option :value="5">每 5 回合</option>
               <option :value="10">每 10 回合</option>
@@ -661,9 +632,9 @@ onBeforeUnmount(() => {
           </label>
           <div class="settings-actions">
             <button type="button" @click="saveLlmSettings">保存</button>
-            <span class="meta">{{ llmReady ? '已配置' : '未配置，将使用本地解析' }}</span>
+            <span class="meta">{{ llmReady ? '已接入 LLM' : '未接入，AI 使用模拟决策' }}</span>
           </div>
-          <p class="meta">接口需兼容 OpenAI chat/completions，配置同时用于 Agent 指挥与频道聊天。</p>
+          <p class="meta">接口需兼容 OpenAI chat/completions。未接入 LLM 时由模拟 AI 接管决策与频道对话，接入后使用正式模型。</p>
         </div>
       </section>
     </div>
@@ -1072,40 +1043,6 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
-.command {
-  left: 20px;
-  bottom: 20px;
-  width: 320px;
-  max-height: 28vh;
-  padding: 14px 16px;
-  overflow: auto;
-  pointer-events: auto;
-}
-
-.command h2 {
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  color: #c8b98e;
-}
-
-.cmd-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.cmd-row select {
-  flex: 1;
-  border: 1px solid rgba(214, 186, 122, 0.4);
-  border-radius: 6px;
-  padding: 5px 6px;
-  background: rgba(12, 19, 24, 0.9);
-  color: #e7dfcb;
-  font-size: 12px;
-}
-
 .src-badge {
   flex: none;
   padding: 2px 6px;
@@ -1121,107 +1058,15 @@ onBeforeUnmount(() => {
   color: #8fd0a8;
 }
 
-.cmd-input {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.cmd-input input {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid rgba(214, 186, 122, 0.3);
-  border-radius: 6px;
-  padding: 6px 8px;
-  background: rgba(8, 13, 17, 0.85);
-  color: #e9e4d6;
-  font-size: 12px;
-}
-
-.cmd-input button {
-  flex: none;
-  border: 1px solid rgba(214, 186, 122, 0.5);
-  border-radius: 6px;
-  padding: 6px 10px;
-  background: rgba(214, 186, 122, 0.18);
-  color: #f0dfb4;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.cmd-input button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.auto-line {
+.comms-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 11px;
-  color: #9fadb0;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
 
-.agent-bots {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-  list-style: none;
-}
-
-.agent-bots li {
-  display: grid;
-  grid-template-columns: 8px 52px 52px 1fr;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-
-.link-btn {
-  border: 1px solid rgba(214, 186, 122, 0.4);
-  border-radius: 6px;
-  padding: 5px 10px;
-  background: rgba(214, 186, 122, 0.14);
-  color: #f0dfb4;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.settings-link {
-  margin-top: 10px;
-}
-
-.agent-log {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-  list-style: none;
-}
-
-.agent-log li {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.dtext {
-  color: #cfd6d3;
-}
-
-.dtext em {
-  display: block;
-  margin-top: 2px;
-  color: #d08f8f;
-  font-style: normal;
+.comms-head h2 {
+  margin-bottom: 0;
 }
 
 .comms h2 {
@@ -1471,7 +1316,7 @@ onBeforeUnmount(() => {
 
 .field > span {
   flex: none;
-  width: 72px;
+  width: 84px;
 }
 
 .field input[type='text'],
@@ -1569,7 +1414,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 820px) {
   .status,
-  .command,
   .comms {
     display: none;
   }
