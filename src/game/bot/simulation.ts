@@ -291,10 +291,20 @@ export class MarchSimulation {
     general.path = choice.path
     general.captureProgress = 0
     general.captureCost = Math.max(2, (tile?.level ?? 0) + 1)
+    this.primeMarch(general)
     this.log(
       general.faction,
       `${general.name}前往${tile?.name ?? '地块'}（${choice.target.q},${choice.target.r}）`,
     )
+  }
+
+  /** Start moving in the same round once a new direction has been chosen */
+  private primeMarch(general: GeneralState): void {
+    const next = general.path[0]
+    if (!next) return
+    const tile = getTile(this.terrain, next)
+    if (!tile) return
+    general.actionPoints = Math.max(general.actionPoints, tile.moveCost)
   }
 
   private captureTile(general: GeneralState): void {
@@ -371,6 +381,7 @@ export class MarchSimulation {
       general.path = result.path
       general.captureProgress = 0
       general.captureCost = Math.max(2, tile.level + 1)
+      this.primeMarch(general)
     }
   }
 

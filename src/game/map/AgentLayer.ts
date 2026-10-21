@@ -10,7 +10,10 @@ import {
   type Diplomacy,
   type RelationStyle,
 } from '../bot/diplomacy'
-import { hexCornerPoints } from './hex'
+import { HEX_WIDTH, hexCornerPoints } from './hex'
+
+/** World units walked per second; one hex takes roughly 0.55s */
+const WALK_SPEED = HEX_WIDTH / 0.55
 
 export interface WorldPosition {
   x: number
@@ -26,6 +29,11 @@ interface AgentToken {
   bodyMaterial: THREE.MeshStandardMaterial
   lineMaterial: THREE.LineBasicMaterial
   ringMaterial: THREE.MeshBasicMaterial
+  /** Tile centers still to be walked through, in order */
+  waypoints: THREE.Vector3[]
+  tileKey: string
+  walkSpeed: number
+  baseY: number
   phase: number
 }
 
@@ -83,14 +91,34 @@ export class AgentLayer {
 
   update(dt: number): void {
     this.elapsed += dt
-    const factor = Math.min(1, dt * 12)
+    const step = Math.min(dt, 0.25)
+    const heightFactor = Math.min(1, dt * 8)
 
     for (const token of this.tokens.values()) {
-      token.root.position.x = THREE.MathUtils.lerp(token.root.position.x, token.targetPosition.x, factor)
-      token.root.position.z = THREE.MathUtils.lerp(token.root.position.z, token.targetPosition.z, factor)
+      // Walk the queued tile centers at a constant speed instead of easing between snapshots
+      let budget = token.walkSpeed * step
+      while (budget > 0 && token.waypoints.length > 0) {
+        const next = token.waypoints[0]!
+        const dx = next.x - token.root.position.x
+        const dz = next.z - token.root.position.z
+        const distance = Math.hypot(dx, dz)
+
+        if (distance <= budget || distance < 1e-4) {
+          token.root.position.x = next.x
+          token.root.position.z = next.z
+          token.waypoints.shift()
+          budget -= distance
+        } else {
+          token.root.position.x += (dx / distance) * budget
+          token.root.position.z += (dz / distance) * budget
+          budget = 0
+        }
+      }
+
+      const targetY = token.waypoints.length > 0 ? token.waypoints[0]!.y : token.targetPosition.y
+      token.baseY = THREE.MathUtils.lerp(token.baseY, targetY, heightFactor)
       token.root.position.y =
-        THREE.MathUtils.lerp(token.root.position.y, token.targetPosition.y, factor) +
-        Math.sin(this.elapsed * 2.4 + token.phase) * 0.03
+        token.baseY + Math.sin(this.elapsed * 2.4 + token.phase) * 0.03
 
       if (token.targetRing.visible) {
         token.targetRing.scale.setScalar(1 + Math.sin(this.elapsed * 3 + token.phase) * 0.08)
@@ -171,6 +199,10 @@ export class AgentLayer {
       bodyMaterial,
       lineMaterial,
       ringMaterial,
+      waypoints: [],
+      tileKey: `${general.coord.q},${general.coord.r}`,
+      walkSpeed: WALK_SPEED,
+      baseY: position.y + 0.05,
       phase: this.tokens.size * 1.7,
     }
   }
@@ -178,6 +210,15 @@ export class AgentLayer {
   private updateToken(token: AgentToken, general: GeneralState): void {
     const position = this.toWorld(general.coord.q, general.coord.r)
     token.targetPosition.set(position.x, position.y + 0.05, position.z)
+
+    // Queue the new tile center so the token walks there instead of snapping
+    const tileKey = `${general.coord.q},${general.coord.r}`
+    if (tileKey !== token.tileKey) {
+      token.tileKey = tileKey
+      token.waypoints.push(token.targetPosition.clone())
+      // Drop stale waypoints when the simulation outruns the animation
+      if (token.waypoints.length > 4) token.waypoints.splice(0, token.waypoints.length - 4)
+    }
 
     const points: THREE.Vector3[] = [new THREE.Vector3(position.x, position.y + 0.32, position.z)]
     for (const step of general.path) {
