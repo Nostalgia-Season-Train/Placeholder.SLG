@@ -31,9 +31,9 @@ import {
 } from './types'
 
 const NAME_POOL: Record<Faction, string[]> = {
-  red: ['赤羽', '烈风'],
-  cyan: ['青岚', '寒江'],
-  gold: ['金沙', '狼烟'],
+  red: ['朔风', '烈风'],
+  cyan: ['寒江', '听涛'],
+  gold: ['狼烟', '铁衣'],
 }
 
 /** Number of generals per faction */

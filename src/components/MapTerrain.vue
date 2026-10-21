@@ -4,7 +4,6 @@ import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
 import { MarchSimulation } from '@/game/bot/simulation'
 import {
-  FACTION_COLORS,
   FACTIONS,
   FACTION_NAMES,
   STATUS_LABELS,
@@ -66,10 +65,6 @@ function toCss(color: number): string {
 
 function levelColor(level: number): string {
   return toCss(getTerrainLevel(level).color)
-}
-
-function factionColorCss(faction: Faction): string {
-  return toCss(FACTION_COLORS[faction])
 }
 
 const diplomacy = computed(() => createDiplomacy(agentFaction.value))
@@ -402,7 +397,7 @@ onBeforeUnmount(() => {
             class="badge"
             :style="{
               background: hover.city
-                ? factionColorCss(hover.city.faction)
+                ? relationColorCss(hover.city.faction)
                 : hover.isBank
                   ? '#b7a67a'
                   : levelColor(hover.level),
@@ -494,7 +489,7 @@ onBeforeUnmount(() => {
       <ul v-if="chatTab === 'log'" ref="logList" class="log-list">
         <li v-for="(e, i) in snapshot?.events ?? []" :key="i">
           <span class="round">{{ e.round }}</span>
-          <span class="logtext" :style="e.faction ? { color: factionColorCss(e.faction) } : undefined">
+          <span class="logtext" :style="e.faction ? { color: relationColorCss(e.faction) } : undefined">
             {{ e.text }}
           </span>
         </li>
@@ -507,7 +502,7 @@ onBeforeUnmount(() => {
             <div class="chat-head">
               <span
                 class="author"
-                :style="m.faction ? { color: factionColorCss(m.faction) } : undefined"
+                :style="m.faction ? { color: relationColorCss(m.faction) } : undefined"
               >
                 {{ m.author }}
               </span>

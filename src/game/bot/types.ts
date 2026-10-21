@@ -8,9 +8,9 @@ export type Faction = 'red' | 'cyan' | 'gold'
 export const FACTIONS: Faction[] = ['red', 'cyan', 'gold']
 
 export const FACTION_NAMES: Record<Faction, string> = {
-  red: '赤军',
-  cyan: '青军',
-  gold: '黄军',
+  red: '北庭',
+  cyan: '东川',
+  gold: '西陵',
 }
 
 export const FACTION_COLORS: Record<Faction, number> = {
