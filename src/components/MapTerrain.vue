@@ -7,10 +7,19 @@ import {
   FACTION_COLORS,
   FACTIONS,
   FACTION_NAMES,
+  ORDER_LABELS,
   STATUS_LABELS,
   type Faction,
   type SimSnapshot,
 } from '@/game/bot/types'
+import { CommanderAgent, type AgentDecision } from '@/game/agent/commander'
+import {
+  OpenAiCompatClient,
+  isLlmConfigured,
+  loadLlmConfig,
+  saveLlmConfig,
+  type LlmConfig,
+} from '@/game/agent/llm'
 
 const host = ref<HTMLDivElement | null>(null)
 const renderer = shallowRef<MapRenderer | null>(null)
@@ -21,6 +30,17 @@ const seed = ref(20261021)
 const tileCount = ref(0)
 const running = ref(true)
 const speed = ref(200)
+const agent = shallowRef<CommanderAgent | null>(null)
+const agentFaction = ref<Faction>('red')
+const directive = ref('向北推进，夺取价值高的地块')
+const agentBusy = ref(false)
+const agentDecisions = ref<AgentDecision[]>([])
+const autoCommand = ref(false)
+const llmConfig = ref<LlmConfig>(loadLlmConfig())
+const llmReady = computed(() => isLlmConfigured(llmConfig.value))
+const AUTO_INTERVAL = 10
+const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
+let lastAutoRound = 0
 let lastOccupationVersion = -1
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -56,6 +76,61 @@ function captureWidth(progress: number, cost: number): string {
   return `${Math.min(100, Math.round((progress / Math.max(1, cost)) * 100))}%`
 }
 
+const factionGenerals = computed(() =>
+  generalRows.value.filter((general) => general.faction === agentFaction.value),
+)
+
+const agentSourceLabel = computed(() => (llmReady.value ? 'LLM' : '本地解析'))
+
+function orderLabel(stance: string | undefined): string {
+  return stance ? ORDER_LABELS[stance as keyof typeof ORDER_LABELS] ?? stance : '—'
+}
+
+/* ------------------------------------------------------------------ */
+/* Agent                                                               */
+/* ------------------------------------------------------------------ */
+
+function createLlmClient() {
+  return isLlmConfigured(llmConfig.value) ? new OpenAiCompatClient(llmConfig.value) : null
+}
+
+function saveLlmSettings(): void {
+  saveLlmConfig(llmConfig.value)
+  agent.value?.setLlm(createLlmClient())
+}
+
+async function issueDirective(text: string): Promise<void> {
+  const engine = simulation.value
+  const commander = agent.value
+  const content = text.trim()
+  if (!engine || !commander || agentBusy.value || !content) return
+
+  agentBusy.value = true
+  try {
+    const round = engine.snapshot().round
+    const decision = await commander.decide(content, agentFaction.value, engine.snapshot())
+    for (const order of decision.orders) {
+      engine.setOrder(order.generalId, {
+        stance: order.stance,
+        target: order.target,
+        note: order.reason,
+        issuedRound: round,
+      })
+    }
+    agentDecisions.value = [decision, ...agentDecisions.value].slice(0, 6)
+    syncSnapshot()
+  } finally {
+    agentBusy.value = false
+  }
+}
+
+function maybeAutoCommand(): void {
+  const round = snapshot.value?.round ?? 0
+  if (!autoCommand.value || agentBusy.value || round - lastAutoRound < AUTO_INTERVAL) return
+  lastAutoRound = round
+  void issueDirective(AUTO_DIRECTIVE)
+}
+
 /* ------------------------------------------------------------------ */
 /* Simulation loop                                                     */
 /* ------------------------------------------------------------------ */
@@ -63,7 +138,11 @@ function captureWidth(progress: number, cost: number): string {
 function initSimulation(): void {
   const map = renderer.value?.getMap()
   if (!map) return
-  simulation.value = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
+  const engine = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
+  simulation.value = engine
+  agent.value = new CommanderAgent(engine.terrain, createLlmClient())
+  agentDecisions.value = []
+  lastAutoRound = 0
   lastOccupationVersion = -1
   syncSnapshot()
 }
@@ -87,6 +166,7 @@ function stepOnce(): void {
   if (!simulation.value) return
   simulation.value.step()
   syncSnapshot()
+  maybeAutoCommand()
 }
 
 function stopTimer(): void {
@@ -141,6 +221,7 @@ onBeforeUnmount(() => {
   renderer.value?.dispose()
   renderer.value = null
   simulation.value = null
+  agent.value = null
 })
 </script>
 
@@ -239,6 +320,63 @@ onBeforeUnmount(() => {
           </span>
           <span v-else class="rgoal">
             {{ w.target ? `${w.target.q},${w.target.r}` : '—' }}
+          </span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="panel command">
+      <h2>指挥 Agent</h2>
+      <div class="cmd-row">
+        <select v-model="agentFaction">
+          <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
+        </select>
+        <span class="src-badge" :class="{ live: llmReady }">{{ agentSourceLabel }}</span>
+      </div>
+
+      <div class="cmd-input">
+        <input
+          v-model="directive"
+          type="text"
+          placeholder="例：向北推进，夺取道路两侧地块"
+          @keyup.enter="issueDirective(directive)"
+        />
+        <button type="button" :disabled="agentBusy" @click="issueDirective(directive)">
+          {{ agentBusy ? '思考中' : '下达' }}
+        </button>
+      </div>
+
+      <label class="auto-line">
+        <input v-model="autoCommand" type="checkbox" />
+        每 {{ AUTO_INTERVAL }} 回合自动指挥
+      </label>
+
+      <ul class="agent-bots">
+        <li v-for="g in factionGenerals" :key="g.id">
+          <span class="dot small" :style="{ background: factionColorCss(g.faction) }"></span>
+          <span class="rname">{{ g.name }}</span>
+          <span class="rgoal">{{ orderLabel(g.order?.stance) }}</span>
+          <span class="rgoal">{{ g.target ? `${g.target.q},${g.target.r}` : '—' }}</span>
+        </li>
+      </ul>
+
+      <details class="llm-settings">
+        <summary>LLM 设置</summary>
+        <input v-model="llmConfig.baseUrl" placeholder="baseUrl" />
+        <input v-model="llmConfig.model" placeholder="model" />
+        <input v-model="llmConfig.apiKey" type="password" placeholder="apiKey（仅存本地）" />
+        <button type="button" @click="saveLlmSettings">保存</button>
+        <p class="meta">未配置时使用本地指令解析；接口需兼容 OpenAI chat/completions。</p>
+      </details>
+
+      <ul class="agent-log">
+        <li v-for="(d, i) in agentDecisions" :key="i">
+          <span class="src-badge" :class="{ live: d.source === 'llm' }">
+            {{ d.source === 'llm' ? 'LLM' : 'Mock' }}
+          </span>
+          <span class="dtext">
+            {{ d.reply }}
+            <em v-if="d.error">{{ d.error }}</em>
           </span>
         </li>
       </ul>
@@ -632,6 +770,175 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
+.command {
+  right: 20px;
+  bottom: 44px;
+  width: 320px;
+  max-height: 36vh;
+  padding: 14px 16px;
+  overflow: auto;
+  pointer-events: auto;
+}
+
+.command h2 {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: #c8b98e;
+}
+
+.cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmd-row select {
+  flex: 1;
+  border: 1px solid rgba(214, 186, 122, 0.4);
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: rgba(12, 19, 24, 0.9);
+  color: #e7dfcb;
+  font-size: 12px;
+}
+
+.src-badge {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #8fa0a5;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.src-badge.live {
+  border-color: rgba(143, 208, 168, 0.55);
+  color: #8fd0a8;
+}
+
+.cmd-input {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.cmd-input input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(214, 186, 122, 0.3);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(8, 13, 17, 0.85);
+  color: #e9e4d6;
+  font-size: 12px;
+}
+
+.cmd-input button,
+.llm-settings button {
+  flex: none;
+  border: 1px solid rgba(214, 186, 122, 0.5);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: rgba(214, 186, 122, 0.18);
+  color: #f0dfb4;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cmd-input button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.auto-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #9fadb0;
+}
+
+.agent-bots {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  list-style: none;
+}
+
+.agent-bots li {
+  display: grid;
+  grid-template-columns: 8px 52px 52px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.llm-settings {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+  color: #9fadb0;
+}
+
+.llm-settings summary {
+  cursor: pointer;
+  color: #c8b98e;
+  letter-spacing: 0.08em;
+}
+
+.llm-settings input {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: rgba(8, 13, 17, 0.85);
+  color: #e9e4d6;
+  font-size: 11px;
+}
+
+.llm-settings button {
+  margin-top: 6px;
+  padding: 4px 10px;
+}
+
+.agent-log {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  list-style: none;
+}
+
+.agent-log li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.dtext {
+  color: #cfd6d3;
+}
+
+.dtext em {
+  display: block;
+  margin-top: 2px;
+  color: #d08f8f;
+  font-style: normal;
+}
+
 .log h2 {
   margin-bottom: 8px;
   font-size: 12px;
@@ -684,7 +991,8 @@ onBeforeUnmount(() => {
 
 @media (max-width: 820px) {
   .legend,
-  .status {
+  .status,
+  .command {
     display: none;
   }
 

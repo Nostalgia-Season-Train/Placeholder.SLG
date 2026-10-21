@@ -41,6 +41,25 @@ export interface Personality {
   caution: number
 }
 
+/** Stance a commander agent can assign to a bot */
+export type BotStance = 'auto' | 'attack' | 'defend' | 'hold' | 'retreat'
+
+export const ORDER_LABELS: Record<BotStance, string> = {
+  auto: '自主行动',
+  attack: '进攻',
+  defend: '防守',
+  hold: '待命',
+  retreat: '撤退',
+}
+
+/** Order issued by an agent; `auto` means the bot falls back to its own decision logic */
+export interface BotOrder {
+  stance: BotStance
+  target: Coord | null
+  note: string
+  issuedRound: number
+}
+
 export interface GeneralState {
   id: string
   name: string
@@ -49,6 +68,7 @@ export interface GeneralState {
   speed: number
   power: number
   personality: Personality
+  order: BotOrder | null
   target: Coord | null
   path: Coord[]
   actionPoints: number

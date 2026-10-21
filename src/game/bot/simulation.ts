@@ -6,6 +6,7 @@
 import { worldToAxial } from '../map/hex'
 import { mulberry32, type MapData } from '../map/MapGenerator'
 import { chooseTarget } from './decision'
+import { findPath } from './pathfinding'
 import {
   coordKey,
   getTile,
@@ -17,6 +18,9 @@ import {
 } from './terrain'
 import {
   FACTIONS,
+  ORDER_LABELS,
+  type BotOrder,
+  type BotStance,
   type Faction,
   type Coord,
   type SimEvent,
@@ -32,6 +36,9 @@ const NAME_POOL: Record<Faction, string[]> = {
 
 /** Number of generals per faction */
 const GENERALS_PER_FACTION = 2
+
+/** Stances that require the bot to march to an explicit tile */
+const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
 
 export class MarchSimulation {
   readonly terrain: WorldTerrain
@@ -54,6 +61,19 @@ export class MarchSimulation {
     for (const general of this.generals) this.act(general)
   }
 
+  /** Assign an order to one bot; returns false when the bot does not belong to the simulation */
+  setOrder(generalId: string, order: BotOrder): boolean {
+    const general = this.generals.find((item) => item.id === generalId)
+    if (!general) return false
+
+    general.order = order
+    general.captureProgress = 0
+
+    const target = order.target ? `（${order.target.q},${order.target.r}）` : ''
+    this.log(general.faction, `${general.name}收到指令：${ORDER_LABELS[order.stance]}${target}`)
+    return true
+  }
+
   /** Read-only snapshot shared with the rendering layer */
   snapshot(): SimSnapshot {
     const factionCounts: Record<Faction, number> = { red: 0, cyan: 0, gold: 0 }
@@ -67,6 +87,7 @@ export class MarchSimulation {
         target: general.target ? { ...general.target } : null,
         path: general.path.map((tile) => ({ ...tile })),
         personality: { ...general.personality },
+        order: general.order ? { ...general.order, target: general.order.target ? { ...general.order.target } : null } : null,
       })),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
@@ -114,6 +135,7 @@ export class MarchSimulation {
             aggression: this.random(),
             caution: 0.35 + this.random() * 0.65,
           },
+          order: null,
           target: null,
           path: [],
           actionPoints: 0,
@@ -139,6 +161,19 @@ export class MarchSimulation {
       general.restTurns -= 1
       general.status = 'resting'
       return
+    }
+
+    if (general.order) {
+      if (general.order.stance === 'hold') {
+        general.target = null
+        general.path = []
+        general.captureProgress = 0
+        general.status = 'garrison'
+        return
+      }
+      if (TARGETED_STANCES.includes(general.order.stance)) {
+        this.followOrder(general, general.order)
+      }
     }
 
     if (!general.target) this.pickTarget(general)
@@ -217,6 +252,9 @@ export class MarchSimulation {
       general.path = []
       general.captureProgress = 0
       general.status = 'garrison'
+      if (general.order?.stance === 'attack' || general.order?.stance === 'retreat') {
+        general.order = null
+      }
       return
     }
 
@@ -233,10 +271,45 @@ export class MarchSimulation {
     general.target = null
     general.path = []
     general.status = 'garrison'
+    if (general.order?.stance === 'attack' || general.order?.stance === 'retreat') {
+      general.order = null
+    }
     this.log(
       general.faction,
       `${general.name}占领${tile.level}级${tile.name}（${general.coord.q},${general.coord.r}）`,
     )
+  }
+
+  /** Move a bot toward the tile named by its order, recomputing the path when needed */
+  private followOrder(general: GeneralState, order: BotOrder): void {
+    if (!order.target) {
+      general.order = null
+      return
+    }
+
+    const tile = getTile(this.terrain, order.target)
+    if (!tile?.passable) {
+      general.order = null
+      return
+    }
+
+    const targetKey = coordKey(order.target)
+    if (coordKey(general.coord) === targetKey) {
+      general.target = { ...order.target }
+      return
+    }
+
+    if (!general.target || coordKey(general.target) !== targetKey || general.path.length === 0) {
+      const result = findPath(this.terrain, general.coord, order.target)
+      if (!result) {
+        general.order = null
+        return
+      }
+      general.target = { ...order.target }
+      general.path = result.path
+      general.captureProgress = 0
+      general.captureCost = Math.max(2, tile.level + 1)
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -265,6 +338,7 @@ export class MarchSimulation {
     loser.captureProgress = 0
     loser.restTurns = 2
     loser.status = 'resting'
+    loser.order = null
 
     const key = coordKey(winner.coord)
     winner.target = null
