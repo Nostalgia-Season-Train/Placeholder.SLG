@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
-import { MarchSimulation } from '@/game/ai/simulation'
+import { MarchSimulation } from '@/game/bot/simulation'
 import {
   FACTION_COLORS,
   FACTIONS,
@@ -10,7 +10,7 @@ import {
   STATUS_LABELS,
   type Faction,
   type SimSnapshot,
-} from '@/game/ai/types'
+} from '@/game/bot/types'
 
 const host = ref<HTMLDivElement | null>(null)
 const renderer = shallowRef<MapRenderer | null>(null)
@@ -151,8 +151,8 @@ onBeforeUnmount(() => {
 
     <header class="panel head">
       <div class="head-title">
-        <h1>大地图 · AI 行军推演</h1>
-        <p>程序化地形 · 势力武将自主选择目标、行军与占领</p>
+        <h1>大地图 · Bot 行军推演</h1>
+        <p>程序化地形 · 势力 Bot 自主选择目标、行军与占领</p>
       </div>
       <div class="head-actions">
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>

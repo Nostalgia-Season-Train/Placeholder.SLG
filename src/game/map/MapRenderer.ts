@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Faction, GeneralState } from '../ai/types'
+import type { Faction, GeneralState } from '../bot/types'
 import { AgentLayer } from './AgentLayer'
 import { hexCornerPoints, tileKey } from './hex'
 import { generateMap, type MapData } from './MapGenerator'

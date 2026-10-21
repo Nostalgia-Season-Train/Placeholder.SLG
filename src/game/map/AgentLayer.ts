@@ -4,7 +4,7 @@
  * It only consumes simulation snapshots and contains no simulation logic.
  */
 import * as THREE from 'three'
-import { FACTION_COLORS, type Faction, type GeneralState } from '../ai/types'
+import { FACTION_COLORS, type Faction, type GeneralState } from '../bot/types'
 import { hexCornerPoints } from './hex'
 
 export interface WorldPosition {
