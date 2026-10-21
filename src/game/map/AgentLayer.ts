@@ -5,6 +5,11 @@
  */
 import * as THREE from 'three'
 import { FACTION_COLORS, type Faction, type GeneralState } from '../bot/types'
+import {
+  relationStyleOf,
+  type Diplomacy,
+  type RelationStyle,
+} from '../bot/diplomacy'
 import { hexCornerPoints } from './hex'
 
 export interface WorldPosition {
@@ -18,6 +23,9 @@ interface AgentToken {
   pathLine: THREE.Line
   targetRing: THREE.Mesh
   targetPosition: THREE.Vector3
+  bodyMaterial: THREE.MeshStandardMaterial
+  lineMaterial: THREE.LineBasicMaterial
+  ringMaterial: THREE.MeshBasicMaterial
   phase: number
 }
 
@@ -26,13 +34,21 @@ export class AgentLayer {
   private readonly toWorld: (q: number, r: number) => WorldPosition
   private readonly tokens = new Map<string, AgentToken>()
   private occupationMesh: THREE.InstancedMesh | null = null
+  private borderMesh: THREE.InstancedMesh | null = null
+  private occupation: Map<string, Faction> | null = null
+  private diplomacy: Diplomacy | null = null
   private elapsed = 0
 
   constructor(toWorld: (q: number, r: number) => WorldPosition) {
     this.toWorld = toWorld
   }
 
-  setAgents(generals: GeneralState[]): void {
+  setAgents(generals: GeneralState[], diplomacy?: Diplomacy): void {
+    if (diplomacy && this.diplomacy?.playerFaction !== diplomacy.playerFaction) {
+      this.diplomacy = diplomacy
+      this.rebuildOccupation()
+    }
+
     const present = new Set(generals.map((general) => general.id))
 
     for (const [id, token] of this.tokens) {
@@ -47,58 +63,22 @@ export class AgentLayer {
         token = this.createToken(general)
         this.tokens.set(general.id, token)
       }
+      this.applyTokenColor(token, general.faction)
       this.updateToken(token, general)
     }
   }
 
-  /** Occupation overlays are rebuilt as a whole on ownership change; tile count is bounded */
-  setOccupations(occupation: Map<string, Faction>): void {
-    this.destroyOccupationMesh()
-    if (occupation.size === 0) return
+  setDiplomacy(diplomacy: Diplomacy): void {
+    if (this.diplomacy?.playerFaction === diplomacy.playerFaction) return
+    this.diplomacy = diplomacy
+    this.rebuildOccupation()
+  }
 
-    const corners = hexCornerPoints(0.92)
-    const shape = new THREE.Shape()
-    const first = corners[0]!
-    shape.moveTo(first.x, first.z)
-    for (let i = 1; i < corners.length; i++) shape.lineTo(corners[i]!.x, corners[i]!.z)
-    shape.closePath()
-
-    const geometry = new THREE.ShapeGeometry(shape)
-    geometry.rotateX(-Math.PI / 2)
-
-    const material = new THREE.MeshBasicMaterial({
-      transparent: true,
-      opacity: 0.58,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-
-    const mesh = new THREE.InstancedMesh(geometry, material, occupation.size)
-    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
-
-    const dummy = new THREE.Object3D()
-    const color = new THREE.Color()
-    let index = 0
-
-    for (const [key, faction] of occupation) {
-      const [q, r] = key.split(',').map(Number)
-      if (q === undefined || r === undefined || Number.isNaN(q) || Number.isNaN(r)) continue
-
-      const position = this.toWorld(q, r)
-      dummy.position.set(position.x, position.y + 0.035, position.z)
-      dummy.updateMatrix()
-      mesh.setMatrixAt(index, dummy.matrix)
-      mesh.setColorAt(index, color.setHex(FACTION_COLORS[faction]))
-      index += 1
-    }
-
-    mesh.count = index
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
-    mesh.computeBoundingSphere()
-    mesh.renderOrder = 3
-
-    this.group.add(mesh)
-    this.occupationMesh = mesh
+  /** Occupation overlays are rebuilt as a whole on ownership or diplomacy change */
+  setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
+    this.occupation = new Map(occupation)
+    this.diplomacy = diplomacy
+    this.rebuildOccupation()
   }
 
   update(dt: number): void {
@@ -121,7 +101,8 @@ export class AgentLayer {
   clear(): void {
     for (const token of this.tokens.values()) this.destroyToken(token)
     this.tokens.clear()
-    this.destroyOccupationMesh()
+    this.destroyOccupationMeshes()
+    this.occupation = null
   }
 
   dispose(): void {
@@ -132,7 +113,7 @@ export class AgentLayer {
   /* ------------------------------------------------------------------ */
 
   private createToken(general: GeneralState): AgentToken {
-    const color = FACTION_COLORS[general.faction]
+    const color = this.styleFor(general.faction).fill
     const root = new THREE.Group()
 
     const base = new THREE.Mesh(
@@ -141,16 +122,14 @@ export class AgentLayer {
     )
     base.position.y = 0.035
 
-    const body = new THREE.Mesh(
-      new THREE.ConeGeometry(0.17, 0.52, 6),
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: 0.35,
-        roughness: 0.55,
-        metalness: 0.15,
-      }),
-    )
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.35,
+      roughness: 0.55,
+      metalness: 0.15,
+    })
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.52, 6), bodyMaterial)
     body.position.y = 0.32
 
     const bead = new THREE.Mesh(
@@ -164,21 +143,20 @@ export class AgentLayer {
     const position = this.toWorld(general.coord.q, general.coord.r)
     root.position.set(position.x, position.y + 0.05, position.z)
 
-    const pathLine = new THREE.Line(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 }),
-    )
+    const lineMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 })
+    const pathLine = new THREE.Line(new THREE.BufferGeometry(), lineMaterial)
     pathLine.visible = false
 
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
     const targetRing = new THREE.Mesh(
       new THREE.RingGeometry(0.3, 0.42, 6).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.7,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
+      ringMaterial,
     )
     targetRing.visible = false
     targetRing.renderOrder = 4
@@ -190,6 +168,9 @@ export class AgentLayer {
       pathLine,
       targetRing,
       targetPosition: root.position.clone(),
+      bodyMaterial,
+      lineMaterial,
+      ringMaterial,
       phase: this.tokens.size * 1.7,
     }
   }
@@ -238,12 +219,121 @@ export class AgentLayer {
     ;(token.targetRing.material as THREE.Material).dispose()
   }
 
-  private destroyOccupationMesh(): void {
-    if (!this.occupationMesh) return
-    this.group.remove(this.occupationMesh)
-    this.occupationMesh.geometry.dispose()
-    ;(this.occupationMesh.material as THREE.Material).dispose()
-    this.occupationMesh.dispose()
-    this.occupationMesh = null
+  private rebuildOccupation(): void {
+    this.destroyOccupationMeshes()
+    const occupation = this.occupation
+    if (!occupation || occupation.size === 0) return
+
+    const entries: { q: number; r: number; fill: number; border: number | null }[] = []
+    for (const [key, faction] of occupation) {
+      const [q, r] = key.split(',').map(Number)
+      if (q === undefined || r === undefined || Number.isNaN(q) || Number.isNaN(r)) continue
+      const style = this.styleFor(faction)
+      entries.push({ q, r, fill: style.fill, border: style.border })
+    }
+    if (entries.length === 0) return
+
+    const dummy = new THREE.Object3D()
+    const color = new THREE.Color()
+
+    const fillGeometry = new THREE.ShapeGeometry(hexShape(0.92)).rotateX(-Math.PI / 2)
+    const fillMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.58,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+    const fillMesh = new THREE.InstancedMesh(fillGeometry, fillMaterial, entries.length)
+    fillMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+
+    entries.forEach((entry, index) => {
+      const position = this.toWorld(entry.q, entry.r)
+      dummy.position.set(position.x, position.y + 0.035, position.z)
+      dummy.updateMatrix()
+      fillMesh.setMatrixAt(index, dummy.matrix)
+      fillMesh.setColorAt(index, color.setHex(entry.fill))
+    })
+
+    fillMesh.count = entries.length
+    if (fillMesh.instanceColor) fillMesh.instanceColor.needsUpdate = true
+    fillMesh.computeBoundingSphere()
+    fillMesh.renderOrder = 3
+    this.group.add(fillMesh)
+    this.occupationMesh = fillMesh
+
+    const bordered = entries.filter((entry) => entry.border !== null)
+    if (bordered.length === 0) return
+
+    const borderGeometry = new THREE.ShapeGeometry(hexRingShape(0.99, 0.85)).rotateX(-Math.PI / 2)
+    const borderMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.92,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+    const borderMesh = new THREE.InstancedMesh(borderGeometry, borderMaterial, bordered.length)
+    borderMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+
+    bordered.forEach((entry, index) => {
+      const position = this.toWorld(entry.q, entry.r)
+      dummy.position.set(position.x, position.y + 0.045, position.z)
+      dummy.updateMatrix()
+      borderMesh.setMatrixAt(index, dummy.matrix)
+      borderMesh.setColorAt(index, color.setHex(entry.border!))
+    })
+
+    borderMesh.count = bordered.length
+    if (borderMesh.instanceColor) borderMesh.instanceColor.needsUpdate = true
+    borderMesh.computeBoundingSphere()
+    borderMesh.renderOrder = 4
+    this.group.add(borderMesh)
+    this.borderMesh = borderMesh
   }
+
+  private styleFor(faction: Faction): RelationStyle {
+    if (!this.diplomacy) return { fill: FACTION_COLORS[faction], border: null }
+    return relationStyleOf(this.diplomacy, faction)
+  }
+
+  private applyTokenColor(token: AgentToken, faction: Faction): void {
+    const style = this.styleFor(faction)
+    token.bodyMaterial.color.setHex(style.fill)
+    token.bodyMaterial.emissive.setHex(style.fill)
+    token.lineMaterial.color.setHex(style.fill)
+    token.ringMaterial.color.setHex(style.fill)
+  }
+
+  private destroyOccupationMeshes(): void {
+    for (const mesh of [this.occupationMesh, this.borderMesh]) {
+      if (!mesh) continue
+      this.group.remove(mesh)
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+      mesh.dispose()
+    }
+    this.occupationMesh = null
+    this.borderMesh = null
+  }
+}
+
+function hexShape(radius: number): THREE.Shape {
+  const corners = hexCornerPoints(radius)
+  const shape = new THREE.Shape()
+  const first = corners[0]!
+  shape.moveTo(first.x, first.z)
+  for (let i = 1; i < corners.length; i++) shape.lineTo(corners[i]!.x, corners[i]!.z)
+  shape.closePath()
+  return shape
+}
+
+function hexRingShape(outerRadius: number, innerRadius: number): THREE.Shape {
+  const shape = hexShape(outerRadius)
+  const corners = hexCornerPoints(innerRadius)
+  const hole = new THREE.Path()
+  const first = corners[0]!
+  hole.moveTo(first.x, first.z)
+  for (let i = 1; i < corners.length; i++) hole.lineTo(corners[i]!.x, corners[i]!.z)
+  hole.closePath()
+  shape.holes.push(hole)
+  return shape
 }

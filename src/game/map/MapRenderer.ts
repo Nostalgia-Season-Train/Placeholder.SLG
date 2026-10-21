@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { FACTION_NAMES, type BaseCity, type Faction, type GeneralState } from '../bot/types'
+import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
 import { hexCornerPoints, tileKey } from './hex'
@@ -170,18 +171,24 @@ export class MapRenderer {
   }
 
   /** Sync general positions, paths and targets */
-  setAgents(generals: GeneralState[]): void {
-    this.agentLayer?.setAgents(generals)
+  setAgents(generals: GeneralState[], diplomacy?: Diplomacy): void {
+    this.agentLayer?.setAgents(generals, diplomacy)
   }
 
   /** Sync faction home cities */
-  setCities(cities: BaseCity[]): void {
-    this.cityLayer?.setCities(cities)
+  setCities(cities: BaseCity[], diplomacy?: Diplomacy): void {
+    this.cityLayer?.setCities(cities, diplomacy)
   }
 
   /** Sync tile ownership */
-  setOccupations(occupation: Map<string, Faction>): void {
-    this.agentLayer?.setOccupations(occupation)
+  setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
+    this.agentLayer?.setOccupations(occupation, diplomacy)
+  }
+
+  /** Recolor existing overlays and tokens after the player faction changes */
+  setDiplomacy(diplomacy: Diplomacy): void {
+    this.agentLayer?.setDiplomacy(diplomacy)
+    this.cityLayer?.setDiplomacy(diplomacy)
   }
 
   /** Clear the simulation presentation */

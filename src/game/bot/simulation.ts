@@ -180,7 +180,7 @@ export class MarchSimulation {
           name,
           faction,
           coord: { ...spawn },
-          speed: 1 + this.random() * 0.65,
+          speed: 0.6 + this.random() * 0.4,
           power: 48 + Math.round(this.random() * 34),
           personality: {
             aggression: this.random(),
@@ -249,7 +249,7 @@ export class MarchSimulation {
       return
     }
 
-    general.actionPoints = Math.min(4, general.actionPoints + general.speed)
+    general.actionPoints = Math.min(2, general.actionPoints + general.speed)
     general.status = 'marching'
 
     while (general.path.length > 0) {

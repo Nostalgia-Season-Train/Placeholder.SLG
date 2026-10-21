@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three'
 import { FACTION_COLORS, type BaseCity } from '../bot/types'
+import { relationStyleOf, type Diplomacy } from '../bot/diplomacy'
 import type { WorldPosition } from './AgentLayer'
 
 interface CityToken {
@@ -21,20 +22,30 @@ export class CityLayer {
   private readonly cityByKey = new Map<string, BaseCity>()
   private elapsed = 0
   private signature = ''
+  private diplomacy: Diplomacy | null = null
 
   constructor(toWorld: (q: number, r: number) => WorldPosition) {
     this.toWorld = toWorld
   }
 
-  setCities(cities: BaseCity[]): void {
-    const signature = cities
-      .map((city) => `${city.faction}:${city.coord.q},${city.coord.r}`)
-      .join('|')
+  setCities(cities: BaseCity[], diplomacy?: Diplomacy): void {
+    if (diplomacy) this.diplomacy = diplomacy
+
+    const signature = [
+      this.diplomacy?.playerFaction ?? '',
+      ...cities.map((city) => `${city.faction}:${city.coord.q},${city.coord.r}`),
+    ].join('|')
     if (signature === this.signature) return
 
     this.clear()
     this.signature = signature
     cities.forEach((city, index) => this.addCity(city, index))
+  }
+
+  setDiplomacy(diplomacy: Diplomacy): void {
+    if (this.diplomacy?.playerFaction === diplomacy.playerFaction) return
+    this.diplomacy = diplomacy
+    this.signature = ''
   }
 
   /** Resolve a raycast hit back to the city it belongs to */
@@ -82,7 +93,9 @@ export class CityLayer {
     const key = `${city.faction}:${city.coord.q},${city.coord.r}`
     if (this.cityByKey.has(key)) return
 
-    const color = FACTION_COLORS[city.faction]
+    const color = this.diplomacy
+      ? relationStyleOf(this.diplomacy, city.faction).fill
+      : FACTION_COLORS[city.faction]
     const position = this.toWorld(city.coord.q, city.coord.r)
     const root = new THREE.Group()
     root.position.set(position.x, position.y, position.z)

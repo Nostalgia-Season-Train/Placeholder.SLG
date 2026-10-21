@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
 import { MarchSimulation } from '@/game/bot/simulation'
@@ -14,6 +14,7 @@ import {
 } from '@/game/bot/types'
 import { CommanderAgent, type AgentDecision } from '@/game/agent/commander'
 import { WarChat, type ChatMessage } from '@/game/agent/chat'
+import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 import {
   OpenAiCompatClient,
   isLlmConfigured,
@@ -30,7 +31,7 @@ const hover = ref<HoverInfo | null>(null)
 const seed = ref(20261021)
 const tileCount = ref(0)
 const running = ref(true)
-const speed = ref(200)
+const speed = ref(650)
 const agent = shallowRef<CommanderAgent | null>(null)
 const agentFaction = ref<Faction>('red')
 const directive = ref('向北推进，夺取价值高的地块')
@@ -65,11 +66,28 @@ function factionColorCss(faction: Faction): string {
   return toCss(FACTION_COLORS[faction])
 }
 
+const diplomacy = computed(() => createDiplomacy(agentFaction.value))
+
+function relationColorCss(faction: Faction): string {
+  return toCss(relationStyleOf(diplomacy.value, faction).fill)
+}
+
+function factionSwatchStyle(faction: Faction): Record<string, string> {
+  const style = relationStyleOf(diplomacy.value, faction)
+  const result: Record<string, string> = { background: toCss(style.fill) }
+  if (style.border !== null) result.boxShadow = `inset 0 0 0 2px ${toCss(style.border)}`
+  return result
+}
+
+function factionRelationLabel(faction: Faction): string {
+  return RELATION_LABELS[diplomacy.value.relations[faction]]
+}
+
 const factionRows = computed(() =>
   FACTIONS.map((faction) => ({
     faction,
     name: FACTION_NAMES[faction],
-    color: factionColorCss(faction),
+    color: relationColorCss(faction),
     count: snapshot.value?.factionCounts[faction] ?? 0,
   })),
 )
@@ -226,14 +244,20 @@ function syncSnapshot(): void {
 
   const result = engine.snapshot()
   snapshot.value = result
-  view.setAgents(result.generals)
-  view.setCities(result.cities)
+  const policy = diplomacy.value
+  view.setAgents(result.generals, policy)
+  view.setCities(result.cities, policy)
 
   if (result.occupationVersion !== lastOccupationVersion) {
     lastOccupationVersion = result.occupationVersion
-    view.setOccupations(result.occupation)
+    view.setOccupations(result.occupation, policy)
   }
 }
+
+watch(agentFaction, () => {
+  renderer.value?.setDiplomacy(diplomacy.value)
+  syncSnapshot()
+})
 
 function stepOnce(): void {
   if (!simulation.value) return
@@ -314,9 +338,9 @@ onBeforeUnmount(() => {
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>
         <button type="button" @click="stepOnce">单步</button>
         <select v-model.number="speed" @change="onSpeedChange">
-          <option :value="340">慢</option>
-          <option :value="200">中</option>
-          <option :value="110">快</option>
+          <option :value="1100">慢</option>
+          <option :value="650">中</option>
+          <option :value="350">快</option>
         </select>
         <button type="button" @click="regenerate">重新生成</button>
       </div>
@@ -351,8 +375,9 @@ onBeforeUnmount(() => {
       <h2 class="sub-title">势力</h2>
       <ul>
         <li v-for="faction in FACTIONS" :key="faction">
-          <span class="swatch" :style="{ background: factionColorCss(faction) }"></span>
+          <span class="swatch" :style="factionSwatchStyle(faction)"></span>
           <span class="name">{{ FACTION_NAMES[faction] }}</span>
+          <span class="rel">{{ factionRelationLabel(faction) }}</span>
         </li>
       </ul>
       <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
@@ -410,7 +435,7 @@ onBeforeUnmount(() => {
 
       <ul class="roster">
         <li v-for="w in generalRows" :key="w.id">
-          <span class="dot small" :style="{ background: factionColorCss(w.faction) }"></span>
+          <span class="dot small" :style="{ background: relationColorCss(w.faction) }"></span>
           <span class="rname">{{ w.name }}</span>
           <span class="rstate" :class="w.status">{{ STATUS_LABELS[w.status] }}</span>
           <span v-if="w.status === 'capturing'" class="rprogress">
@@ -649,7 +674,7 @@ onBeforeUnmount(() => {
 .legend {
   top: 128px;
   left: 20px;
-  width: 192px;
+  width: 214px;
   padding: 14px 16px;
 }
 
@@ -709,6 +734,13 @@ onBeforeUnmount(() => {
 
 .name {
   color: #e7dfcb;
+}
+
+.rel {
+  margin-left: auto;
+  font-size: 10px;
+  color: #8fa0a5;
+  white-space: nowrap;
 }
 
 .blocked {
