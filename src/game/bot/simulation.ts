@@ -57,6 +57,7 @@ export class MarchSimulation {
   private readonly events: SimEvent[] = []
   private round = 0
   private occupationVersion = 0
+  private eventLimit = 14
 
   constructor(map: MapData, seed: number) {
     this.terrain = buildTerrain(map)
@@ -84,6 +85,11 @@ export class MarchSimulation {
     return true
   }
 
+  /** Number of recent events kept in each snapshot */
+  setEventLimit(limit: number): void {
+    this.eventLimit = Math.max(1, Math.floor(limit))
+  }
+
   /** Read-only snapshot shared with the rendering layer */
   snapshot(): SimSnapshot {
     const factionCounts: Record<Faction, number> = { red: 0, cyan: 0, gold: 0 }
@@ -102,7 +108,7 @@ export class MarchSimulation {
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
-      events: this.events.slice(-14).reverse(),
+      events: this.events.slice(-this.eventLimit).reverse(),
       capturedCount: this.occupation.size,
       capturableCount: this.terrain.capturable.length,
       factionCounts,

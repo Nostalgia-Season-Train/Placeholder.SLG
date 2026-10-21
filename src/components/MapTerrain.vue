@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
 import { MarchSimulation } from '@/game/bot/simulation'
@@ -23,6 +23,8 @@ import {
   type LlmConfig,
 } from '@/game/agent/llm'
 
+type SettingsTab = 'march' | 'log' | 'llm'
+
 const host = ref<HTMLDivElement | null>(null)
 const renderer = shallowRef<MapRenderer | null>(null)
 const simulation = shallowRef<MarchSimulation | null>(null)
@@ -32,6 +34,13 @@ const seed = ref(20261021)
 const tileCount = ref(0)
 const running = ref(true)
 const speed = ref(650)
+const seedDraft = ref(String(seed.value))
+const settingsOpen = ref(false)
+const settingsTab = ref<SettingsTab>('march')
+const autoInterval = ref(10)
+const logLimit = ref(14)
+const autoScrollLog = ref(true)
+const logList = ref<HTMLUListElement | null>(null)
 const agent = shallowRef<CommanderAgent | null>(null)
 const agentFaction = ref<Faction>('red')
 const directive = ref('向北推进，夺取价值高的地块')
@@ -48,7 +57,6 @@ const chatBusy = ref(false)
 const WORLD_CHAT_INTERVAL = 20
 let lastWorldChatRound = 0
 let worldChatIndex = 0
-const AUTO_INTERVAL = 10
 const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
 let lastAutoRound = 0
 let lastOccupationVersion = -1
@@ -166,7 +174,7 @@ async function issueDirective(text: string): Promise<void> {
 
 function maybeAutoCommand(): void {
   const round = snapshot.value?.round ?? 0
-  if (!autoCommand.value || agentBusy.value || round - lastAutoRound < AUTO_INTERVAL) return
+  if (!autoCommand.value || agentBusy.value || round - lastAutoRound < autoInterval.value) return
   lastAutoRound = round
   void issueDirective(AUTO_DIRECTIVE)
 }
@@ -223,6 +231,7 @@ function initSimulation(): void {
   const map = renderer.value?.getMap()
   if (!map) return
   const engine = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
+  engine.setEventLimit(logLimit.value)
   simulation.value = engine
   agent.value = new CommanderAgent(engine.terrain, createLlmClient())
   const panel = new WarChat(engine.terrain, createLlmClient())
@@ -292,10 +301,43 @@ function onSpeedChange(): void {
 function regenerate(): void {
   running.value = true
   stopTimer()
-  renderer.value?.regenerate(Math.floor(Math.random() * 1_000_000_000))
+  const typed = Number.parseInt(seedDraft.value, 10)
+  const nextSeed =
+    Number.isFinite(typed) && typed > 0 ? typed : Math.floor(Math.random() * 1_000_000_000)
+  seedDraft.value = String(nextSeed)
+  renderer.value?.regenerate(nextSeed)
   initSimulation()
   startTimer()
 }
+
+/* ------------------------------------------------------------------ */
+/* Settings                                                            */
+/* ------------------------------------------------------------------ */
+
+function openSettings(tab: SettingsTab): void {
+  settingsTab.value = tab
+  settingsOpen.value = true
+}
+
+function onLogLimitChange(): void {
+  simulation.value?.setEventLimit(logLimit.value)
+  syncSnapshot()
+}
+
+watch(
+  () => snapshot.value?.events,
+  async () => {
+    if (!autoScrollLog.value || chatTab.value !== 'log') return
+    await nextTick()
+    if (logList.value) logList.value.scrollTop = 0
+  },
+)
+
+watch(chatTab, async (tab) => {
+  if (tab !== 'log' || !autoScrollLog.value) return
+  await nextTick()
+  if (logList.value) logList.value.scrollTop = 0
+})
 
 onMounted(() => {
   if (!host.value) return
@@ -337,12 +379,7 @@ onBeforeUnmount(() => {
       <div class="head-actions">
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>
         <button type="button" @click="stepOnce">单步</button>
-        <select v-model.number="speed" @change="onSpeedChange">
-          <option :value="1100">慢</option>
-          <option :value="650">中</option>
-          <option :value="350">快</option>
-        </select>
-        <button type="button" @click="regenerate">重新生成</button>
+        <button type="button" @click="openSettings('march')">设置</button>
       </div>
     </header>
 
@@ -471,7 +508,7 @@ onBeforeUnmount(() => {
 
       <label class="auto-line">
         <input v-model="autoCommand" type="checkbox" />
-        每 {{ AUTO_INTERVAL }} 回合自动指挥
+        每 {{ autoInterval }} 回合自动指挥
       </label>
 
       <ul class="agent-bots">
@@ -483,14 +520,9 @@ onBeforeUnmount(() => {
         </li>
       </ul>
 
-      <details class="llm-settings">
-        <summary>LLM 设置</summary>
-        <input v-model="llmConfig.baseUrl" placeholder="baseUrl" />
-        <input v-model="llmConfig.model" placeholder="model" />
-        <input v-model="llmConfig.apiKey" type="password" placeholder="apiKey（仅存本地）" />
-        <button type="button" @click="saveLlmSettings">保存</button>
-        <p class="meta">未配置时使用本地指令解析；接口需兼容 OpenAI chat/completions。</p>
-      </details>
+      <button type="button" class="link-btn settings-link" @click="openSettings('llm')">
+        LLM 与推演设置
+      </button>
 
       <ul class="agent-log">
         <li v-for="(d, i) in agentDecisions" :key="i">
@@ -533,7 +565,7 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <ul v-if="chatTab === 'log'" class="log-list">
+      <ul v-if="chatTab === 'log'" ref="logList" class="log-list">
         <li v-for="(e, i) in snapshot?.events ?? []" :key="i">
           <span class="round">{{ e.round }}</span>
           <span class="logtext" :style="e.faction ? { color: factionColorCss(e.faction) } : undefined">
@@ -568,6 +600,108 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </section>
+
+    <div v-if="settingsOpen" class="settings-mask" @click.self="settingsOpen = false">
+      <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header class="settings-head">
+          <h2 id="settings-title">设置</h2>
+          <button type="button" class="close" aria-label="关闭" @click="settingsOpen = false">×</button>
+        </header>
+
+        <nav class="settings-tabs">
+          <button
+            type="button"
+            :class="{ active: settingsTab === 'march' }"
+            @click="settingsTab = 'march'"
+          >
+            大地图行军
+          </button>
+          <button
+            type="button"
+            :class="{ active: settingsTab === 'log' }"
+            @click="settingsTab = 'log'"
+          >
+            战况日志
+          </button>
+          <button
+            type="button"
+            :class="{ active: settingsTab === 'llm' }"
+            @click="settingsTab = 'llm'"
+          >
+            LLM
+          </button>
+        </nav>
+
+        <div v-if="settingsTab === 'march'" class="settings-body">
+          <label class="field">
+            <span>推演速度</span>
+            <select v-model.number="speed" @change="onSpeedChange">
+              <option :value="1100">慢</option>
+              <option :value="650">中</option>
+              <option :value="350">快</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>自动指挥</span>
+            <select v-model.number="autoInterval">
+              <option :value="5">每 5 回合</option>
+              <option :value="10">每 10 回合</option>
+              <option :value="20">每 20 回合</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>地图种子</span>
+            <input v-model="seedDraft" type="number" min="1" />
+          </label>
+          <div class="settings-actions">
+            <button type="button" @click="regenerate">按种子重新生成</button>
+            <span class="meta">当前种子 {{ seed }}</span>
+          </div>
+          <p class="meta">重新生成会清空当前推演进度与行军日志。</p>
+        </div>
+
+        <div v-else-if="settingsTab === 'log'" class="settings-body">
+          <label class="field">
+            <span>显示条数</span>
+            <select v-model.number="logLimit" @change="onLogLimitChange">
+              <option :value="10">10 条</option>
+              <option :value="14">14 条</option>
+              <option :value="20">20 条</option>
+              <option :value="30">30 条</option>
+            </select>
+          </label>
+          <label class="field check">
+            <span>自动滚动</span>
+            <input v-model="autoScrollLog" type="checkbox" />
+          </label>
+          <p class="meta">战况日志位于左下「通讯 · 行军」页签，最新记录显示在最上方。</p>
+        </div>
+
+        <div v-else class="settings-body">
+          <label class="field">
+            <span>baseUrl</span>
+            <input
+              v-model="llmConfig.baseUrl"
+              type="text"
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+          <label class="field">
+            <span>model</span>
+            <input v-model="llmConfig.model" type="text" placeholder="gpt-4o-mini" />
+          </label>
+          <label class="field">
+            <span>apiKey</span>
+            <input v-model="llmConfig.apiKey" type="password" placeholder="仅保存在本地浏览器" />
+          </label>
+          <div class="settings-actions">
+            <button type="button" @click="saveLlmSettings">保存</button>
+            <span class="meta">{{ llmReady ? '已配置' : '未配置，将使用本地解析' }}</span>
+          </div>
+          <p class="meta">接口需兼容 OpenAI chat/completions，配置同时用于 Agent 指挥与频道聊天。</p>
+        </div>
+      </section>
+    </div>
 
     <footer class="hint">拖拽平移 · 滚轮缩放 · 悬停查看地块</footer>
   </div>
@@ -659,16 +793,6 @@ onBeforeUnmount(() => {
 
 .head button:hover {
   background: rgba(214, 186, 122, 0.34);
-}
-
-.head select {
-  border: 1px solid rgba(214, 186, 122, 0.4);
-  border-radius: 8px;
-  padding: 7px 8px;
-  background: rgba(12, 19, 24, 0.9);
-  color: #e7dfcb;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 .legend {
@@ -1026,8 +1150,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.cmd-input button,
-.llm-settings button {
+.cmd-input button {
   flex: none;
   border: 1px solid rgba(214, 186, 122, 0.5);
   border-radius: 6px;
@@ -1070,34 +1193,18 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-.llm-settings {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-  font-size: 11px;
-  color: #9fadb0;
-}
-
-.llm-settings summary {
-  cursor: pointer;
-  color: #c8b98e;
-  letter-spacing: 0.08em;
-}
-
-.llm-settings input {
-  width: 100%;
-  margin-top: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+.link-btn {
+  border: 1px solid rgba(214, 186, 122, 0.4);
   border-radius: 6px;
-  padding: 5px 7px;
-  background: rgba(8, 13, 17, 0.85);
-  color: #e9e4d6;
+  padding: 5px 10px;
+  background: rgba(214, 186, 122, 0.14);
+  color: #f0dfb4;
   font-size: 11px;
+  cursor: pointer;
 }
 
-.llm-settings button {
-  margin-top: 6px;
-  padding: 4px 10px;
+.settings-link {
+  margin-top: 10px;
 }
 
 .agent-log {
@@ -1282,6 +1389,142 @@ onBeforeUnmount(() => {
   letter-spacing: 0.12em;
   color: rgba(233, 228, 214, 0.6);
   pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Settings dialog                                                     */
+/* ------------------------------------------------------------------ */
+
+.settings-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(4, 8, 11, 0.62);
+  backdrop-filter: blur(3px);
+  pointer-events: auto;
+}
+
+.settings-dialog {
+  width: min(460px, 100%);
+  max-height: min(82vh, 640px);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px 18px;
+  border: 1px solid rgba(214, 186, 122, 0.38);
+  border-radius: 14px;
+  background: rgba(12, 19, 24, 0.97);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.5);
+  color: #e9e4d6;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-head h2 {
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  color: #f1e6c8;
+}
+
+.settings-head .close {
+  border: none;
+  background: transparent;
+  color: #9fadb0;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.settings-tabs button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  padding: 4px 10px;
+  background: transparent;
+  color: #9fadb0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.settings-tabs button.active {
+  border-color: rgba(214, 186, 122, 0.55);
+  background: rgba(214, 186, 122, 0.16);
+  color: #f0dfb4;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #9fadb0;
+}
+
+.field > span {
+  flex: none;
+  width: 72px;
+}
+
+.field input[type='text'],
+.field input[type='password'],
+.field input[type='number'],
+.field select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(214, 186, 122, 0.3);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(8, 13, 17, 0.85);
+  color: #e9e4d6;
+  font-size: 12px;
+}
+
+.field.check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: #d6ba7a;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-actions button {
+  border: 1px solid rgba(214, 186, 122, 0.5);
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: rgba(214, 186, 122, 0.18);
+  color: #f0dfb4;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-actions .meta {
+  margin-top: 0;
 }
 
 @media (max-width: 820px) {
