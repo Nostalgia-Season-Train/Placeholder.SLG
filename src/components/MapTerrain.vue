@@ -13,6 +13,7 @@ import {
   type SimSnapshot,
 } from '@/game/bot/types'
 import { CommanderAgent, type AgentDecision } from '@/game/agent/commander'
+import { WarChat, type ChatMessage } from '@/game/agent/chat'
 import {
   OpenAiCompatClient,
   isLlmConfigured,
@@ -38,6 +39,14 @@ const agentDecisions = ref<AgentDecision[]>([])
 const autoCommand = ref(false)
 const llmConfig = ref<LlmConfig>(loadLlmConfig())
 const llmReady = computed(() => isLlmConfigured(llmConfig.value))
+const chat = shallowRef<WarChat | null>(null)
+const chatTick = ref(0)
+const chatTab = ref<'world' | 'alliance' | 'log'>('world')
+const chatDraft = ref('')
+const chatBusy = ref(false)
+const WORLD_CHAT_INTERVAL = 20
+let lastWorldChatRound = 0
+let worldChatIndex = 0
 const AUTO_INTERVAL = 10
 const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
 let lastAutoRound = 0
@@ -82,6 +91,18 @@ const factionGenerals = computed(() =>
 
 const agentSourceLabel = computed(() => (llmReady.value ? 'LLM' : '本地解析'))
 
+const chatMessages = computed<ChatMessage[]>(() => {
+  chatTick.value
+  const panel = chat.value
+  const channel = chatTab.value
+  if (!panel || channel === 'log') return []
+  return panel.list(channel)
+})
+
+const chatPlaceholder = computed(() =>
+  chatTab.value === 'world' ? '向世界频道发言（所有 LLM）' : '向本方 LLM 询问或下令',
+)
+
 function orderLabel(stance: string | undefined): string {
   return stance ? ORDER_LABELS[stance as keyof typeof ORDER_LABELS] ?? stance : '—'
 }
@@ -97,6 +118,7 @@ function createLlmClient() {
 function saveLlmSettings(): void {
   saveLlmConfig(llmConfig.value)
   agent.value?.setLlm(createLlmClient())
+  chat.value?.setLlm(createLlmClient())
 }
 
 async function issueDirective(text: string): Promise<void> {
@@ -132,6 +154,50 @@ function maybeAutoCommand(): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Chat                                                                */
+/* ------------------------------------------------------------------ */
+
+async function sendChat(): Promise<void> {
+  const panel = chat.value
+  const engine = simulation.value
+  const channel = chatTab.value
+  const text = chatDraft.value.trim()
+  if (!panel || !engine || !text || chatBusy.value || channel === 'log') return
+
+  chatDraft.value = ''
+  chatBusy.value = true
+  try {
+    await panel.post(channel, text, agentFaction.value, engine.snapshot())
+  } finally {
+    chatBusy.value = false
+    chatTick.value += 1
+  }
+}
+
+async function broadcastWorld(): Promise<void> {
+  const panel = chat.value
+  const engine = simulation.value
+  if (!panel || !engine || chatBusy.value) return
+
+  const faction = FACTIONS[worldChatIndex % FACTIONS.length]!
+  worldChatIndex += 1
+  chatBusy.value = true
+  try {
+    await panel.broadcast(faction, engine.snapshot())
+  } finally {
+    chatBusy.value = false
+    chatTick.value += 1
+  }
+}
+
+function maybeWorldChat(): void {
+  const round = snapshot.value?.round ?? 0
+  if (!chat.value || chatBusy.value || round - lastWorldChatRound < WORLD_CHAT_INTERVAL) return
+  lastWorldChatRound = round
+  void broadcastWorld()
+}
+
+/* ------------------------------------------------------------------ */
 /* Simulation loop                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -141,8 +207,14 @@ function initSimulation(): void {
   const engine = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
   simulation.value = engine
   agent.value = new CommanderAgent(engine.terrain, createLlmClient())
+  const panel = new WarChat(engine.terrain, createLlmClient())
+  panel.welcome(agentFaction.value, 0)
+  chat.value = panel
+  chatTick.value += 1
   agentDecisions.value = []
   lastAutoRound = 0
+  lastWorldChatRound = 0
+  worldChatIndex = 0
   lastOccupationVersion = -1
   syncSnapshot()
 }
@@ -166,6 +238,7 @@ function stepOnce(): void {
   if (!simulation.value) return
   simulation.value.step()
   syncSnapshot()
+  maybeWorldChat()
   maybeAutoCommand()
 }
 
@@ -222,6 +295,7 @@ onBeforeUnmount(() => {
   renderer.value = null
   simulation.value = null
   agent.value = null
+  chat.value = null
 })
 </script>
 
@@ -382,17 +456,68 @@ onBeforeUnmount(() => {
       </ul>
     </section>
 
-    <section class="panel log">
-      <h2>行军日志</h2>
-      <ul>
+    <section class="panel comms">
+      <h2>通讯</h2>
+
+      <div class="tabs">
+        <button
+          type="button"
+          title="所有 LLM"
+          :class="{ active: chatTab === 'world' }"
+          @click="chatTab = 'world'"
+        >
+          世界
+        </button>
+        <button
+          type="button"
+          title="本势力 LLM"
+          :class="{ active: chatTab === 'alliance' }"
+          @click="chatTab = 'alliance'"
+        >
+          同盟
+        </button>
+        <button type="button" :class="{ active: chatTab === 'log' }" @click="chatTab = 'log'">
+          行军
+        </button>
+        <span class="tabhint">
+          {{ chatTab === 'world' ? '所有 LLM' : chatTab === 'alliance' ? '本势力 LLM' : '战况日志' }}
+        </span>
+      </div>
+
+      <ul v-if="chatTab === 'log'" class="log-list">
         <li v-for="(e, i) in snapshot?.events ?? []" :key="i">
           <span class="round">{{ e.round }}</span>
           <span class="logtext" :style="e.faction ? { color: factionColorCss(e.faction) } : undefined">
             {{ e.text }}
           </span>
         </li>
+        <li v-if="!(snapshot?.events.length)" class="empty">推演进行中…</li>
       </ul>
-      <p v-if="!(snapshot?.events.length)" class="empty">推演进行中…</p>
+
+      <template v-else>
+        <ul class="chat-list">
+          <li v-for="m in chatMessages" :key="m.id" :class="{ mine: m.source === 'player' }">
+            <div class="chat-head">
+              <span
+                class="author"
+                :style="m.faction ? { color: factionColorCss(m.faction) } : undefined"
+              >
+                {{ m.author }}
+              </span>
+              <span class="round">R{{ m.round }}</span>
+            </div>
+            <p>{{ m.text }}</p>
+          </li>
+          <li v-if="!chatMessages.length" class="empty">暂无消息</li>
+        </ul>
+
+        <div class="chat-input">
+          <input v-model="chatDraft" :placeholder="chatPlaceholder" @keyup.enter="sendChat" />
+          <button type="button" :disabled="chatBusy" @click="sendChat">
+            {{ chatBusy ? '…' : '发送' }}
+          </button>
+        </div>
+      </template>
     </section>
 
     <footer class="hint">拖拽平移 · 滚轮缩放 · 悬停查看地块</footer>
@@ -760,13 +885,16 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.log {
+.comms {
   left: 20px;
   bottom: 44px;
-  width: 320px;
-  max-height: 24vh;
+  width: 340px;
+  height: 34vh;
+  min-height: 210px;
   padding: 12px 14px;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   pointer-events: auto;
 }
 
@@ -939,7 +1067,7 @@ onBeforeUnmount(() => {
   font-style: normal;
 }
 
-.log h2 {
+.comms h2 {
   margin-bottom: 8px;
   font-size: 12px;
   font-weight: 500;
@@ -947,21 +1075,132 @@ onBeforeUnmount(() => {
   color: #c8b98e;
 }
 
-.log ul {
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.tabs button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  padding: 3px 9px;
+  background: transparent;
+  color: #9fadb0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tabs button.active {
+  border-color: rgba(214, 186, 122, 0.55);
+  background: rgba(214, 186, 122, 0.16);
+  color: #f0dfb4;
+}
+
+.tabhint {
+  margin-left: auto;
+  font-size: 10px;
+  color: #6f7f84;
+}
+
+.chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  list-style: none;
+}
+
+.chat-list li {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-list li.mine {
+  background: rgba(214, 186, 122, 0.1);
+}
+
+.chat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.author {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-head .round {
+  margin-left: auto;
+  font-size: 10px;
+  color: #6f7f84;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-list p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #cfd6d3;
+  word-break: break-word;
+}
+
+.chat-input {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-input input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(214, 186, 122, 0.3);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(8, 13, 17, 0.85);
+  color: #e9e4d6;
+  font-size: 11px;
+}
+
+.chat-input button {
+  flex: none;
+  border: 1px solid rgba(214, 186, 122, 0.5);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: rgba(214, 186, 122, 0.18);
+  color: #f0dfb4;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-input button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.log-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
   list-style: none;
 }
 
-.log li {
+.log-list li {
   display: flex;
   gap: 8px;
   font-size: 11px;
   line-height: 1.45;
 }
 
-.log .round {
+.log-list .round {
   flex: none;
   min-width: 24px;
   color: #6f7f84;
@@ -983,16 +1222,11 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-@media (max-width: 1080px) {
-  .log {
-    display: none;
-  }
-}
-
 @media (max-width: 820px) {
   .legend,
   .status,
-  .command {
+  .command,
+  .comms {
     display: none;
   }
 
