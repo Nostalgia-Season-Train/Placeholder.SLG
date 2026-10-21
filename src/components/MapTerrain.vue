@@ -693,6 +693,26 @@ onBeforeUnmount(() => {
 
           <h3>行军与占领</h3>
           <p>武将自主选择目标并寻路，抵达后持续占领；敌对单位同格时发生遭遇战，败者撤退并休整。</p>
+
+          <h3>测试提示词</h3>
+          <p>在「同盟」频道发送，等同向本方 AI 下达指令：</p>
+          <ul>
+            <li><span class="name">向北进攻</span><span class="ldesc">全体向北推进</span></li>
+            <li><span class="name">向东进攻</span><span class="ldesc">全体向东推进</span></li>
+            <li><span class="name">全员防守</span><span class="ldesc">转入防守姿态</span></li>
+            <li><span class="name">原地待命</span><span class="ldesc">停止推进</span></li>
+            <li><span class="name">撤回主城</span><span class="ldesc">撤退并收缩</span></li>
+            <li><span class="name">自由行动</span><span class="ldesc">由 Bot 自主选择地块</span></li>
+            <li><span class="name">进攻 12,8</span><span class="ldesc">指定轴向坐标目标</span></li>
+          </ul>
+          <p>在「世界」频道发送，只触发对话，不改变武将指令：</p>
+          <ul>
+            <li><span class="name">报一下当前战况</span></li>
+            <li><span class="name">你们下一步打算往哪打？</span></li>
+          </ul>
+          <p class="meta">
+            指令支持方向（东南西北 / 上下左右）、姿态（进攻、防守、待命、撤退、自由行动）与坐标（如 12,8）。未接入 LLM 时由模拟 AI 解析，接入后由 LLM 决策。
+          </p>
           <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
         </div>
       </section>
