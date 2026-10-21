@@ -70,8 +70,8 @@ function roadDistance(x: number, z: number, roads: { x: number; z: number }[][])
   return min
 }
 
-/** Base movement cost per terrain level; high mountains are impassable */
-const BASE_MOVE_COST = [1, 1, 1.25, 1.6, 2.3, Infinity]
+/** Base movement cost per terrain level; mountains and high mountains are impassable */
+const BASE_MOVE_COST = [1, 1, 1.25, 1.6, Infinity, Infinity]
 
 export function buildTerrain(map: MapData): WorldTerrain {
   const tiles = new Map<string, TileInfo>()

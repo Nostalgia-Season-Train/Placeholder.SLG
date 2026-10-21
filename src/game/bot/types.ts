@@ -86,9 +86,17 @@ export interface SimEvent {
   text: string
 }
 
+/** Home city of one faction; squads depart from its outskirts */
+export interface BaseCity {
+  faction: Faction
+  coord: Coord
+  name: string
+}
+
 export interface SimSnapshot {
   round: number
   generals: GeneralState[]
+  cities: BaseCity[]
   occupation: Map<string, Faction>
   occupationVersion: number
   events: SimEvent[]

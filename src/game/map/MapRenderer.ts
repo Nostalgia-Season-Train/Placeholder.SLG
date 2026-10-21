@@ -1,12 +1,19 @@
 import * as THREE from 'three'
-import type { Faction, GeneralState } from '../bot/types'
-import { AgentLayer } from './AgentLayer'
+import { FACTION_NAMES, type BaseCity, type Faction, type GeneralState } from '../bot/types'
+import { AgentLayer, type WorldPosition } from './AgentLayer'
+import { CityLayer } from './CityLayer'
 import { hexCornerPoints, tileKey } from './hex'
 import { generateMap, type MapData } from './MapGenerator'
 import { RiverLayer } from './RiverLayer'
 import { RoadLayer } from './RoadLayer'
 import { TerrainLayer } from './TerrainLayer'
 import { getTerrainLevel } from './terrainLevels'
+
+export interface HoverCity {
+  name: string
+  faction: Faction
+  factionName: string
+}
 
 export interface HoverInfo {
   q: number
@@ -16,6 +23,7 @@ export interface HoverInfo {
   desc: string
   height: number
   isBank: boolean
+  city?: HoverCity | null
 }
 
 export interface MapReadyStats {
@@ -57,12 +65,14 @@ export class MapRenderer {
   private riverLayer: RiverLayer | null = null
   private roadLayer: RoadLayer | null = null
   private agentLayer: AgentLayer | null = null
+  private cityLayer: CityLayer | null = null
 
   private resizeObserver: ResizeObserver | null = null
   private dragging = false
   private dragStartX = 0
   private dragStartY = 0
   private hoveredId = -1
+  private hoveredCityKey: string | null = null
   private zoom = 1
   private targetZoom = 1
   private elapsed = 0
@@ -115,13 +125,16 @@ export class MapRenderer {
 
     this.buildMap(options.seed ?? 20261021)
 
-    this.agentLayer = new AgentLayer((q, r) => {
+    const toWorld = (q: number, r: number): WorldPosition => {
       const tile = this.map?.tileMap.get(tileKey(q, r))
       return tile
         ? { x: tile.x, z: tile.z, y: tile.height }
         : { x: 0, z: 0, y: 0 }
-    })
-    this.scene.add(this.agentLayer.group)
+    }
+
+    this.agentLayer = new AgentLayer(toWorld)
+    this.cityLayer = new CityLayer(toWorld)
+    this.scene.add(this.agentLayer.group, this.cityLayer.group)
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove)
@@ -142,6 +155,7 @@ export class MapRenderer {
 
   regenerate(seed: number): void {
     this.hoveredId = -1
+    this.hoveredCityKey = null
     this.highlight.visible = false
     this.options.onHover?.(null)
     this.buildMap(seed)
@@ -158,6 +172,11 @@ export class MapRenderer {
   /** Sync general positions, paths and targets */
   setAgents(generals: GeneralState[]): void {
     this.agentLayer?.setAgents(generals)
+  }
+
+  /** Sync faction home cities */
+  setCities(cities: BaseCity[]): void {
+    this.cityLayer?.setCities(cities)
   }
 
   /** Sync tile ownership */
@@ -186,6 +205,8 @@ export class MapRenderer {
     this.disposeMap()
     this.agentLayer?.dispose()
     this.agentLayer = null
+    this.cityLayer?.dispose()
+    this.cityLayer = null
 
     this.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -209,6 +230,8 @@ export class MapRenderer {
   private buildMap(seed: number): void {
     this.disposeMap()
     this.agentLayer?.clear()
+    this.cityLayer?.clear()
+    this.hoveredCityKey = null
 
     const map = generateMap(seed)
     this.map = map
@@ -318,6 +341,7 @@ export class MapRenderer {
 
     this.riverLayer?.update(this.elapsed)
     this.agentLayer?.update(dt)
+    this.cityLayer?.update(dt)
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -389,6 +413,41 @@ export class MapRenderer {
     if (!this.map || !this.terrainLayer) return
 
     this.raycaster.setFromCamera(this.pointer, this.camera)
+
+    const cityHit = this.cityLayer
+      ? this.raycaster.intersectObject(this.cityLayer.group, true)[0]
+      : undefined
+    const city = cityHit ? this.cityLayer?.resolvePick(cityHit.object) ?? null : null
+
+    if (city) {
+      const key = `${city.faction}:${city.coord.q},${city.coord.r}`
+      if (key === this.hoveredCityKey) return
+
+      const tile = this.map.tileMap.get(tileKey(city.coord.q, city.coord.r))
+      if (!tile) return
+
+      this.hoveredCityKey = key
+      this.hoveredId = -1
+      this.highlight.position.set(tile.x, tile.height + 0.03, tile.z)
+      this.highlight.visible = true
+
+      this.options.onHover?.({
+        q: city.coord.q,
+        r: city.coord.r,
+        level: tile.level,
+        name: city.name,
+        desc: `${FACTION_NAMES[city.faction]}小队出发地`,
+        height: tile.height,
+        isBank: false,
+        city: {
+          name: city.name,
+          faction: city.faction,
+          factionName: FACTION_NAMES[city.faction],
+        },
+      })
+      return
+    }
+
     const hits = this.raycaster.intersectObject(this.terrainLayer.pickMesh, false)
     const hit = hits[0]
     const instanceId = hit?.instanceId
@@ -402,6 +461,7 @@ export class MapRenderer {
     const tile = this.map.tiles[instanceId]
     if (!tile) return
 
+    this.hoveredCityKey = null
     this.hoveredId = instanceId
     this.highlight.position.set(tile.x, tile.height + 0.03, tile.z)
     this.highlight.visible = true
@@ -431,8 +491,9 @@ export class MapRenderer {
   }
 
   private hideHover(): void {
-    if (this.hoveredId === -1) return
+    if (this.hoveredId === -1 && this.hoveredCityKey === null) return
     this.hoveredId = -1
+    this.hoveredCityKey = null
     this.highlight.visible = false
     this.options.onHover?.(null)
   }

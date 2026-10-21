@@ -22,8 +22,8 @@ export const TERRAIN_LEVELS: TerrainLevelDef[] = [
   { level: 1, name: '草地', height: 0.2, color: 0x6f9a3e, desc: '低缓的草地，基础资源地' },
   { level: 2, name: '林地', height: 0.32, color: 0x557f34, desc: '灌木与零散树木覆盖' },
   { level: 3, name: '丘陵', height: 0.58, color: 0x6d7a4a, desc: '起伏的丘陵，视野受阻' },
-  { level: 4, name: '山地', height: 0.95, color: 0x7f7d6e, desc: '岩石裸露，需绕行或强攻' },
-  { level: 5, name: '高山', height: 1.4, color: 0x92969c, desc: '雪线之上的险峻地形' },
+  { level: 4, name: '山地', height: 0.95, color: 0x7f7d6e, desc: '岩壁陡峭，无法通行' },
+  { level: 5, name: '高山', height: 1.4, color: 0x92969c, desc: '雪线之上的险峻地形，无法通行' },
 ]
 
 export function getTerrainLevel(level: number): TerrainLevelDef {

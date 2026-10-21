@@ -227,6 +227,7 @@ function syncSnapshot(): void {
   const result = engine.snapshot()
   snapshot.value = result
   view.setAgents(result.generals)
+  view.setCities(result.cities)
 
   if (result.occupationVersion !== lastOccupationVersion) {
     lastOccupationVersion = result.occupationVersion
@@ -324,14 +325,27 @@ onBeforeUnmount(() => {
     <section class="panel legend">
       <h2>地形等级</h2>
       <ul>
-        <li v-for="level in TERRAIN_LEVELS" :key="level.level">
+        <li v-for="level in TERRAIN_LEVELS.slice(0, 4)" :key="level.level">
           <span class="swatch" :style="{ background: toCss(level.color) }"></span>
           <span class="lv">{{ level.level }} 级</span>
           <span class="name">{{ level.name }}</span>
         </li>
-        <li class="extra">
+      </ul>
+      <h2 class="sub-title">道路与河流</h2>
+      <ul>
+        <li v-for="level in TERRAIN_LEVELS.slice(4)" :key="level.level">
+          <span class="swatch" :style="{ background: toCss(level.color) }"></span>
+          <span class="name">{{ level.name }}</span>
+          <span class="blocked">不可通行</span>
+        </li>
+        <li>
           <span class="swatch road"></span><span class="name">道路</span>
+        </li>
+        <li>
           <span class="swatch river"></span><span class="name">河流</span>
+        </li>
+        <li>
+          <span class="swatch city"></span><span class="name">城池</span>
         </li>
       </ul>
       <h2 class="sub-title">势力</h2>
@@ -349,9 +363,15 @@ onBeforeUnmount(() => {
         <div class="info-head">
           <span
             class="badge"
-            :style="{ background: hover.isBank ? '#b7a67a' : levelColor(hover.level) }"
+            :style="{
+              background: hover.city
+                ? factionColorCss(hover.city.faction)
+                : hover.isBank
+                  ? '#b7a67a'
+                  : levelColor(hover.level),
+            }"
           >
-            {{ hover.isBank ? '滩' : hover.level }}
+            {{ hover.city ? '城' : hover.isBank ? '滩' : hover.level }}
           </span>
           <strong>{{ hover.name }}</strong>
         </div>
@@ -361,7 +381,11 @@ onBeforeUnmount(() => {
             <dt>坐标</dt>
             <dd>{{ hover.q }} , {{ hover.r }}</dd>
           </div>
-          <div>
+          <div v-if="hover.city">
+            <dt>归属</dt>
+            <dd>{{ hover.city.factionName }}</dd>
+          </div>
+          <div v-else>
             <dt>地势</dt>
             <dd>{{ hover.height.toFixed(2) }}</dd>
           </div>
@@ -674,6 +698,10 @@ onBeforeUnmount(() => {
   background: #2f7d84;
 }
 
+.swatch.city {
+  background: #9a927f;
+}
+
 .lv {
   min-width: 34px;
   color: #8fa0a5;
@@ -683,10 +711,12 @@ onBeforeUnmount(() => {
   color: #e7dfcb;
 }
 
-.extra {
-  margin-top: 6px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+.blocked {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: #d08f8f;
+  white-space: nowrap;
 }
 
 .meta {

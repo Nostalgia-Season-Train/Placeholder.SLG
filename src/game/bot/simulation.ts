@@ -17,8 +17,10 @@ import {
   type WorldTerrain,
 } from './terrain'
 import {
+  FACTION_NAMES,
   FACTIONS,
   ORDER_LABELS,
+  type BaseCity,
   type BotOrder,
   type BotStance,
   type Faction,
@@ -37,12 +39,19 @@ const NAME_POOL: Record<Faction, string[]> = {
 /** Number of generals per faction */
 const GENERALS_PER_FACTION = 2
 
+/** Directions of the three home cities, measured from the map center */
+const BASE_ANGLES = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
+
+/** Home cities sit on a ring at this ratio of the shorter map side */
+const CITY_RADIUS_RATIO = 0.32
+
 /** Stances that require the bot to march to an explicit tile */
 const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
 
 export class MarchSimulation {
   readonly terrain: WorldTerrain
   private readonly random: () => number
+  private readonly cities: BaseCity[]
   private readonly generals: GeneralState[]
   private readonly occupation = new Map<string, Faction>()
   private readonly events: SimEvent[] = []
@@ -52,6 +61,7 @@ export class MarchSimulation {
   constructor(map: MapData, seed: number) {
     this.terrain = buildTerrain(map)
     this.random = mulberry32((seed >>> 0) || 1)
+    this.cities = this.createCities(map)
     this.generals = this.createGenerals(map)
   }
 
@@ -89,6 +99,7 @@ export class MarchSimulation {
         personality: { ...general.personality },
         order: general.order ? { ...general.order, target: general.order.target ? { ...general.order.target } : null } : null,
       })),
+      cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
       events: this.events.slice(-14).reverse(),
@@ -102,31 +113,71 @@ export class MarchSimulation {
   /* Setup                                                               */
   /* ------------------------------------------------------------------ */
 
+  /** One home city per faction; its tile starts owned by that faction */
+  private createCities(map: MapData): BaseCity[] {
+    const centerX = (map.bounds.minX + map.bounds.maxX) / 2
+    const centerZ = (map.bounds.minZ + map.bounds.maxZ) / 2
+    const radius =
+      Math.min(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ) *
+      CITY_RADIUS_RATIO
+    const taken = new Set<string>()
+    const result: BaseCity[] = []
+
+    FACTIONS.forEach((faction, factionIndex) => {
+      const angle = BASE_ANGLES[factionIndex] ?? 0
+      const seedCoord = worldToAxial(
+        centerX + Math.cos(angle) * radius,
+        centerZ + Math.sin(angle) * radius,
+      )
+      const coord =
+        nearestCapturable(this.terrain, seedCoord, taken) ??
+        nearestCapturable(this.terrain, seedCoord)
+      if (!coord) return
+
+      taken.add(coordKey(coord))
+      this.occupation.set(coordKey(coord), faction)
+      result.push({ faction, coord: { ...coord }, name: `${FACTION_NAMES[faction]}主城` })
+      this.log(faction, `${FACTION_NAMES[faction]}主城设立于（${coord.q},${coord.r}）`)
+    })
+
+    if (result.length > 0) this.occupationVersion += 1
+    return result
+  }
+
   private createGenerals(map: MapData): GeneralState[] {
     const centerX = (map.bounds.minX + map.bounds.maxX) / 2
     const centerZ = (map.bounds.minZ + map.bounds.maxZ) / 2
     const radius =
-      Math.min(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ) * 0.32
-    const baseAngles = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
-    const taken = new Set<string>()
+      Math.min(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ) *
+      CITY_RADIUS_RATIO
+    const taken = new Set(this.cities.map((city) => coordKey(city.coord)))
     const result: GeneralState[] = []
 
     FACTIONS.forEach((faction, factionIndex) => {
+      const city = this.cities.find((item) => item.faction === faction)
+
       for (let member = 0; member < GENERALS_PER_FACTION; member++) {
-        const angle = (baseAngles[factionIndex] ?? 0) + (member - (GENERALS_PER_FACTION - 1) / 2) * 0.24
-        const seedCoord = worldToAxial(
-          centerX + Math.cos(angle) * radius,
-          centerZ + Math.sin(angle) * radius,
-        )
-        const spawn =
-          nearestCapturable(this.terrain, seedCoord, taken) ??
-          nearestCapturable(this.terrain, seedCoord)
+        let spawn: Coord | null = city ? this.cityOutskirt(city.coord, taken) : null
+        if (!spawn) {
+          const angle =
+            (BASE_ANGLES[factionIndex] ?? 0) + (member - (GENERALS_PER_FACTION - 1) / 2) * 0.24
+          const seedCoord = worldToAxial(
+            centerX + Math.cos(angle) * radius,
+            centerZ + Math.sin(angle) * radius,
+          )
+          spawn =
+            nearestCapturable(this.terrain, seedCoord, taken) ??
+            nearestCapturable(this.terrain, seedCoord)
+        }
         if (!spawn) continue
         taken.add(coordKey(spawn))
 
+        const name = NAME_POOL[faction][member] ?? `${faction}${member + 1}`
+        if (city) this.log(faction, `${name}率小队自${city.name}出发`)
+
         result.push({
           id: `${faction}-${member}`,
-          name: NAME_POOL[faction][member] ?? `${faction}${member + 1}`,
+          name,
           faction,
           coord: { ...spawn },
           speed: 1 + this.random() * 0.65,
@@ -150,6 +201,17 @@ export class MarchSimulation {
     })
 
     return result
+  }
+
+  /** First free passable tile adjacent to the city, used as the squad departure tile */
+  private cityOutskirt(coord: Coord, taken: Set<string>): Coord | null {
+    for (const neighbor of neighbors(coord)) {
+      if (taken.has(coordKey(neighbor))) continue
+      const tile = getTile(this.terrain, neighbor)
+      if (!tile?.passable) continue
+      return { ...neighbor }
+    }
+    return null
   }
 
   /* ------------------------------------------------------------------ */

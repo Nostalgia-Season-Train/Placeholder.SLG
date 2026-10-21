@@ -157,7 +157,8 @@ function distanceToPath(px: number, pz: number, path: PlanePoint[]): number {
 /* 地图生成                                                            */
 /* ------------------------------------------------------------------ */
 
-const LEVEL_WEIGHTS = [0.3, 0.24, 0.2, 0.14, 0.09, 0.03]
+/** Noise only produces 0~3 级地；山地与高山只沿连续山脊生成 */
+const LEVEL_WEIGHTS = [0.36, 0.3, 0.2, 0.14]
 
 export function generateMap(seed: number): MapData {
   const cols = 34
@@ -177,17 +178,21 @@ export function generateMap(seed: number): MapData {
 
   const raw: RawTile[] = []
   const noises: number[] = []
+  // 轴向坐标以地图中心为原点，保证 worldToAxial 的结果能直接用于 tileMap 查询
+  const origin = Math.floor(cols / 2)
 
-  for (let r = 0; r < rows; r++) {
-    for (let q = 0; q < cols; q++) {
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const q = col - origin
+      const r = row - origin
       const { x, z } = axialToWorld(q, r)
-      const noise = fbm(q * 0.16 + noiseOffsetX, r * 0.16 + noiseOffsetZ, seed)
+      const noise = fbm(col * 0.16 + noiseOffsetX, row * 0.16 + noiseOffsetZ, seed)
       raw.push({ q, r, x, z, noise })
       noises.push(noise)
     }
   }
 
-  // 按分位数切等级，保证 0~5 级地在每张图里都能出现
+  // 按分位数切等级，噪声只产生 0~3 级地
   const sorted = noises.slice().sort((a, b) => a - b)
   const cuts: number[] = []
   let cumulative = 0
@@ -235,6 +240,55 @@ export function generateMap(seed: number): MapData {
     }
   }
 
+  // 山脉：与河流同构的连续脊线，沿线抬升为山地与高山，两端留出绕行缺口
+  const ridges: PlanePoint[][] = [
+    createMountainRidge(
+      bounds,
+      rng,
+      false,
+      0.45,
+      0.45,
+      0.5,
+      (bounds.maxX - bounds.minX) * 0.05,
+      rng() * Math.PI * 2,
+    ),
+    createMountainRidge(
+      bounds,
+      rng,
+      true,
+      0.62,
+      0.3,
+      0.45,
+      (bounds.maxX - bounds.minX) * 0.045,
+      rng() * Math.PI * 2 + 1.7,
+    ),
+    createMountainRidge(
+      bounds,
+      rng,
+      true,
+      0.3,
+      0.26,
+      0.2,
+      (bounds.maxX - bounds.minX) * 0.04,
+      rng() * Math.PI * 2 + 3.1,
+    ),
+  ]
+
+  for (const tile of tiles) {
+    if (tile.isWater || tile.isBank) continue
+
+    let distance = Infinity
+    for (const ridge of ridges) {
+      distance = Math.min(distance, distanceToPath(tile.x, tile.z, ridge))
+    }
+    if (distance > 1.75) continue
+
+    const level = distance <= 1 ? 5 : 4
+    const def = getTerrainLevel(level)
+    tile.level = level
+    tile.height = def.height + (rng() - 0.5) * 0.04
+  }
+
   const tileMap = new Map<string, MapTile>()
   for (const tile of tiles) tileMap.set(tileKey(tile.q, tile.r), tile)
 
@@ -245,20 +299,6 @@ export function generateMap(seed: number): MapData {
     createVerticalRoad(bounds, rng, 0.52, (bounds.maxX - bounds.minX) * 0.06, rng() * Math.PI * 2),
   ]
 
-  // 以地图中心为原点
-  const centerX = (bounds.minX + bounds.maxX) / 2
-  const centerZ = (bounds.minZ + bounds.maxZ) / 2
-  for (const tile of tiles) {
-    tile.x -= centerX
-    tile.z -= centerZ
-  }
-  for (const path of [...rivers, ...roads]) {
-    for (const p of path) {
-      p.x -= centerX
-      p.z -= centerZ
-    }
-  }
-
   return {
     seed,
     cols,
@@ -267,12 +307,7 @@ export function generateMap(seed: number): MapData {
     tileMap,
     rivers,
     roads,
-    bounds: {
-      minX: bounds.minX - centerX,
-      maxX: bounds.maxX - centerX,
-      minZ: bounds.minZ - centerZ,
-      maxZ: bounds.maxZ - centerZ,
-    },
+    bounds,
   }
 }
 
@@ -317,6 +352,41 @@ function createHorizontalRiver(
     })
   }
   return sampleCatmullRom(controls, 10)
+}
+
+/** 山脉脊线：与河流同构的连续折线，两端不触及地图边界以便绕行 */
+function createMountainRidge(
+  bounds: MapBounds,
+  rng: () => number,
+  vertical: boolean,
+  baseRatio: number,
+  spanRatio: number,
+  spanCenter: number,
+  amplitude: number,
+  phase: number,
+): PlanePoint[] {
+  const controls: PlanePoint[] = []
+  const steps = 12
+  const spanMin = spanCenter - spanRatio / 2
+  const spanMax = spanCenter + spanRatio / 2
+  const amp = amplitude * (0.85 + rng() * 0.3)
+  const width = bounds.maxX - bounds.minX
+  const height = bounds.maxZ - bounds.minZ
+
+  for (let i = 0; i < steps; i++) {
+    const t = spanMin + (spanMax - spanMin) * (i / (steps - 1))
+    const wave =
+      Math.sin(t * Math.PI * 2.4 + phase) * amp +
+      Math.sin(t * Math.PI * 5.2 + phase * 1.6) * amp * 0.3
+
+    controls.push(
+      vertical
+        ? { x: bounds.minX + width * baseRatio + wave, z: bounds.minZ + height * t }
+        : { x: bounds.minX + width * t, z: bounds.minZ + height * baseRatio + wave },
+    )
+  }
+
+  return sampleCatmullRom(controls, 8)
 }
 
 function createHorizontalRoad(
