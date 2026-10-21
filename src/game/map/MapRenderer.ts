@@ -1,5 +1,7 @@
 import * as THREE from 'three'
-import { hexCornerPoints } from './hex'
+import type { Faction, GeneralState } from '../ai/types'
+import { AgentLayer } from './AgentLayer'
+import { hexCornerPoints, tileKey } from './hex'
 import { generateMap, type MapData } from './MapGenerator'
 import { RiverLayer } from './RiverLayer'
 import { RoadLayer } from './RoadLayer'
@@ -54,6 +56,7 @@ export class MapRenderer {
   private terrainLayer: TerrainLayer | null = null
   private riverLayer: RiverLayer | null = null
   private roadLayer: RoadLayer | null = null
+  private agentLayer: AgentLayer | null = null
 
   private resizeObserver: ResizeObserver | null = null
   private dragging = false
@@ -112,6 +115,14 @@ export class MapRenderer {
 
     this.buildMap(options.seed ?? 20261021)
 
+    this.agentLayer = new AgentLayer((q, r) => {
+      const tile = this.map?.tileMap.get(tileKey(q, r))
+      return tile
+        ? { x: tile.x, z: tile.z, y: tile.height }
+        : { x: 0, z: 0, y: 0 }
+    })
+    this.scene.add(this.agentLayer.group)
+
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove)
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp)
@@ -139,6 +150,26 @@ export class MapRenderer {
     this.targetZoom = 1
   }
 
+  /** 当前地图数据，供推演层初始化使用 */
+  getMap(): MapData | null {
+    return this.map
+  }
+
+  /** Sync general positions, paths and targets */
+  setAgents(generals: GeneralState[]): void {
+    this.agentLayer?.setAgents(generals)
+  }
+
+  /** Sync tile ownership */
+  setOccupations(occupation: Map<string, Faction>): void {
+    this.agentLayer?.setOccupations(occupation)
+  }
+
+  /** Clear the simulation presentation */
+  clearArmy(): void {
+    this.agentLayer?.clear()
+  }
+
   dispose(): void {
     this.renderer.setAnimationLoop(null)
     this.resizeObserver?.disconnect()
@@ -153,6 +184,8 @@ export class MapRenderer {
     canvas.removeEventListener('wheel', this.handleWheel)
 
     this.disposeMap()
+    this.agentLayer?.dispose()
+    this.agentLayer = null
 
     this.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -175,6 +208,7 @@ export class MapRenderer {
 
   private buildMap(seed: number): void {
     this.disposeMap()
+    this.agentLayer?.clear()
 
     const map = generateMap(seed)
     this.map = map
@@ -283,6 +317,7 @@ export class MapRenderer {
     this.camera.lookAt(this.target)
 
     this.riverLayer?.update(this.elapsed)
+    this.agentLayer?.update(dt)
     this.renderer.render(this.scene, this.camera)
   }
 
