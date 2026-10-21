@@ -12,12 +12,14 @@
   },
   "dependencies": {
     "pinia": "^3.0.4",
+    "three": "^0.186.1",
     "vue": "^3.5.28",
     "vue-router": "^5.0.2"
   },
   "devDependencies": {
     "@tsconfig/node24": "^24.0.4",
     "@types/node": "^24.10.13",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-vue": "^6.0.4",
     "@vue/tsconfig": "^0.8.1",
     "npm-run-all2": "^8.0.4",
