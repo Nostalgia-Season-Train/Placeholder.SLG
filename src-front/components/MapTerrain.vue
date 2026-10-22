@@ -14,7 +14,6 @@ import type {
 import {
   FACTIONS,
   FACTION_NAMES,
-  STATUS_LABELS,
   type Faction,
   type SimSnapshot,
 } from '@/game/bot/types'
@@ -49,7 +48,6 @@ const worldMessages = ref<ChatMessage[]>([])
 const allianceMessages = ref<ChatMessage[]>([])
 const llmStatus = ref<LlmStatusDTO | null>(null)
 const llmDraft = ref({ baseUrl: '', model: '', apiKey: '' })
-const llmReady = computed(() => llmStatus.value?.configured ?? false)
 const hasSavedKey = computed(() => llmStatus.value?.hasApiKey ?? false)
 const errorMessage = ref('')
 let lastOccupationVersion = -1
@@ -79,28 +77,6 @@ function factionSwatchStyle(faction: Faction): Record<string, string> {
 function factionRelationLabel(faction: Faction): string {
   return RELATION_LABELS[diplomacy.value.relations[faction]]
 }
-
-const factionRows = computed(() =>
-  FACTIONS.map((faction) => ({
-    faction,
-    name: FACTION_NAMES[faction],
-    color: relationColorCss(faction),
-    count: snapshot.value?.factionCounts[faction] ?? 0,
-  })),
-)
-
-const generalRows = computed(() => snapshot.value?.generals ?? [])
-
-function factionShare(count: number): string {
-  const total = Math.max(1, snapshot.value?.capturedCount ?? 0)
-  return `${Math.round((count / total) * 100)}%`
-}
-
-function captureWidth(progress: number, cost: number): string {
-  return `${Math.min(100, Math.round((progress / Math.max(1, cost)) * 100))}%`
-}
-
-const aiModeLabel = computed(() => (llmReady.value ? 'LLM' : '模拟 AI'))
 
 const chatMessages = computed<ChatMessage[]>(() => {
   if (chatTab.value === 'world') return worldMessages.value
@@ -419,45 +395,14 @@ onBeforeUnmount(() => {
       <p v-else class="empty">悬停到地块上查看信息</p>
     </aside>
 
-    <section class="panel status">
-      <h2>战况</h2>
-      <p class="meta">
-        回合 {{ snapshot?.round ?? 0 }} · 已占领 {{ snapshot?.capturedCount ?? 0 }} /
-        {{ snapshot?.capturableCount ?? 0 }}
-      </p>
-
-      <div v-for="f in factionRows" :key="f.faction" class="faction">
-        <span class="dot" :style="{ background: f.color }"></span>
-        <span class="fname">{{ f.name }}</span>
-        <span class="fcount">{{ f.count }}</span>
-        <div class="fbar"><i :style="{ width: factionShare(f.count) }"></i></div>
-      </div>
-
-      <ul class="roster">
-        <li v-for="w in generalRows" :key="w.id">
-          <span class="dot small" :style="{ background: relationColorCss(w.faction) }"></span>
-          <span class="rname">{{ w.name }}</span>
-          <span class="rstate" :class="w.status">{{ STATUS_LABELS[w.status] }}</span>
-          <span v-if="w.status === 'capturing'" class="rprogress">
-            <i :style="{ width: captureWidth(w.captureProgress, w.captureCost) }"></i>
-          </span>
-          <span v-else class="rgoal">
-            {{ w.target ? `${w.target.q},${w.target.r}` : '—' }}
-          </span>
-        </li>
-      </ul>
-    </section>
-
     <section class="panel comms">
       <div class="comms-head">
         <h2>通讯</h2>
-        <span class="src-badge" :class="{ live: llmReady }">{{ aiModeLabel }}</span>
       </div>
 
       <div class="tabs">
         <button
           type="button"
-          title="所有 LLM"
           :class="{ active: chatTab === 'world' }"
           @click="chatTab = 'world'"
         >
@@ -465,7 +410,6 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          title="本势力 LLM"
           :class="{ active: chatTab === 'alliance' }"
           @click="chatTab = 'alliance'"
         >
@@ -475,7 +419,7 @@ onBeforeUnmount(() => {
           行军
         </button>
         <span class="tabhint">
-          {{ chatTab === 'world' ? '所有 LLM' : chatTab === 'alliance' ? '本势力 LLM' : '战况日志' }}
+          {{ chatTab === 'world' ? '世界频道' : chatTab === 'alliance' ? '同盟频道' : '行军日志' }}
         </span>
       </div>
 
@@ -624,9 +568,8 @@ onBeforeUnmount(() => {
           </label>
           <div class="settings-actions">
             <button type="button" @click="saveLlmSettings">保存</button>
-            <span class="meta">{{ llmReady ? '已接入 LLM' : '未接入，AI 使用模拟决策' }}</span>
           </div>
-          <p class="meta">接口需兼容 OpenAI chat/completions。配置保存在后端，Key 不会下发到浏览器。未接入 LLM 时由模拟 AI 接管决策与频道对话，接入后使用正式模型。</p>
+          <p class="meta">接口需兼容 OpenAI chat/completions。配置保存在后端，Key 不会下发到浏览器。</p>
         </div>
       </section>
     </div>
@@ -703,7 +646,7 @@ onBeforeUnmount(() => {
             <li><span class="name">你们下一步打算往哪打？</span></li>
           </ul>
           <p class="meta">
-            指令支持方向（东南西北 / 上下左右）、姿态（进攻、防守、待命、撤退、自由行动）与坐标（如 12,8）。未接入 LLM 时由模拟 AI 解析，接入后由 LLM 决策。
+            指令支持方向（东南西北 / 上下左右）、姿态（进攻、防守、待命、撤退、自由行动）与坐标（如 12,8）。
           </p>
           <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
         </div>
@@ -918,17 +861,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.status {
-  top: 276px;
-  left: 20px;
-  width: 252px;
-  max-height: 28vh;
-  padding: 14px 16px;
-  overflow: auto;
-  pointer-events: auto;
-}
-
-.status,
 .chat-list,
 .log-list,
 .settings-body,
@@ -938,7 +870,6 @@ onBeforeUnmount(() => {
   scrollbar-color: rgba(200, 185, 142, 0.32) transparent;
 }
 
-.status::-webkit-scrollbar,
 .chat-list::-webkit-scrollbar,
 .log-list::-webkit-scrollbar,
 .settings-body::-webkit-scrollbar,
@@ -947,12 +878,10 @@ onBeforeUnmount(() => {
   height: 6px;
 }
 
-.status::-webkit-scrollbar-track,
 .chat-list::-webkit-scrollbar-track,
 .log-list::-webkit-scrollbar-track,
 .settings-body::-webkit-scrollbar-track,
 .help-body::-webkit-scrollbar-track,
-.status::-webkit-scrollbar-corner,
 .chat-list::-webkit-scrollbar-corner,
 .log-list::-webkit-scrollbar-corner,
 .settings-body::-webkit-scrollbar-corner,
@@ -960,7 +889,6 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
-.status::-webkit-scrollbar-thumb,
 .chat-list::-webkit-scrollbar-thumb,
 .log-list::-webkit-scrollbar-thumb,
 .settings-body::-webkit-scrollbar-thumb,
@@ -969,126 +897,11 @@ onBeforeUnmount(() => {
   background: rgba(200, 185, 142, 0.28);
 }
 
-.status::-webkit-scrollbar-thumb:hover,
 .chat-list::-webkit-scrollbar-thumb:hover,
 .log-list::-webkit-scrollbar-thumb:hover,
 .settings-body::-webkit-scrollbar-thumb:hover,
 .help-body::-webkit-scrollbar-thumb:hover {
   background: rgba(214, 186, 122, 0.55);
-}
-
-.status h2 {
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  color: #c8b98e;
-}
-
-.faction {
-  display: grid;
-  grid-template-columns: 10px 46px 26px 1fr;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: #cfd6d3;
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.dot.small {
-  width: 6px;
-  height: 6px;
-}
-
-.fname {
-  color: #e7dfcb;
-}
-
-.fcount {
-  color: #9fadb0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.fbar {
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-}
-
-.fbar i {
-  display: block;
-  height: 100%;
-  background: currentColor;
-  color: #c8b98e;
-  transition: width 0.25s ease;
-}
-
-.roster {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-  list-style: none;
-}
-
-.roster li {
-  display: grid;
-  grid-template-columns: 8px 46px 40px 1fr;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-
-.rname {
-  color: #e7dfcb;
-}
-
-.rstate {
-  color: #8fa0a5;
-}
-
-.rstate.marching {
-  color: #e0c07a;
-}
-
-.rstate.capturing {
-  color: #8fd0a8;
-}
-
-.rstate.garrison {
-  color: #9fb8d8;
-}
-
-.rstate.resting {
-  color: #d08f8f;
-}
-
-.rprogress {
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-}
-
-.rprogress i {
-  display: block;
-  height: 100%;
-  background: #8fd0a8;
-}
-
-.rgoal {
-  color: #7d8d92;
-  font-variant-numeric: tabular-nums;
 }
 
 .comms {
@@ -1102,21 +915,6 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   pointer-events: auto;
-}
-
-.src-badge {
-  flex: none;
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: #8fa0a5;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.src-badge.live {
-  border-color: rgba(143, 208, 168, 0.55);
-  color: #8fd0a8;
 }
 
 .comms-head {
@@ -1476,7 +1274,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 820px) {
-  .status,
   .comms {
     display: none;
   }
