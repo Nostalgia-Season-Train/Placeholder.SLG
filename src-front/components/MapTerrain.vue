@@ -718,11 +718,11 @@ onBeforeUnmount(() => {
             <input v-model="autoCommand" type="checkbox" @change="onAutoCommandChange" />
           </label>
           <label class="field">
-            <span>决策间隔</span>
+            <span>决策基准间隔</span>
             <select v-model.number="autoInterval" @change="onAutoIntervalChange">
-              <option :value="5">每 5 回合</option>
-              <option :value="10">每 10 回合</option>
-              <option :value="20">每 20 回合</option>
+              <option :value="5">约 5 回合</option>
+              <option :value="10">约 10 回合</option>
+              <option :value="20">约 20 回合</option>
             </select>
           </label>
           <label class="field">

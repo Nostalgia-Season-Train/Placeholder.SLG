@@ -76,8 +76,10 @@ export interface ChatResult {
 
 /** Cursors the runtime keeps between rounds, saved so AI cadence resumes intact */
 export interface SaveCursorsDTO {
-  lastAutoRound: number
-  lastWorldRound: number
+  /** 下一次随机决策触发的回合；0 表示尚未排期 */
+  nextAutoRound: number
+  /** 下一次随机世界发言的回合；0 表示尚未排期 */
+  nextWorldRound: number
   worldChatIndex: number
 }
 

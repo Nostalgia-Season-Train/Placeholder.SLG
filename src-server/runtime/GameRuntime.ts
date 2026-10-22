@@ -82,8 +82,9 @@ export class GameRuntime {
   private busy = false
   private timer: NodeJS.Timeout | null = null
   private lastOccupation: Map<string, Faction> | null = null
-  private lastAutoRound = 0
-  private lastWorldRound = 0
+  /** 下一次随机决策 / 随机世界发言的回合；0 表示尚未排期 */
+  private nextAutoRound = 0
+  private nextWorldRound = 0
   private worldChatIndex = 0
 
   constructor(private readonly hub: SseHub) {
@@ -264,8 +265,8 @@ export class GameRuntime {
       sim,
       chat: this.chat(),
       cursors: {
-        lastAutoRound: this.lastAutoRound,
-        lastWorldRound: this.lastWorldRound,
+        nextAutoRound: this.nextAutoRound,
+        nextWorldRound: this.nextWorldRound,
         worldChatIndex: this.worldChatIndex,
       },
     }
@@ -391,8 +392,8 @@ export class GameRuntime {
     chat.setSpokespersons(this.spokespersons())
     chat.welcome(this.config.faction, 0)
 
-    this.lastAutoRound = 0
-    this.lastWorldRound = 0
+    this.nextAutoRound = 0
+    this.nextWorldRound = 0
     this.worldChatIndex = 0
     return { map, sim, commander, chat }
   }
@@ -420,9 +421,10 @@ export class GameRuntime {
     this.config.faction = state.faction
     this.config.seed = state.seed
     this.worldVersion = state.worldVersion
-    this.lastAutoRound = save.cursors.lastAutoRound
-    this.lastWorldRound = save.cursors.lastWorldRound
-    this.worldChatIndex = save.cursors.worldChatIndex
+    // 旧存档只记录上次触发回合，没有下次排期，按「未排期」重新随机即可
+    this.nextAutoRound = save.cursors.nextAutoRound ?? 0
+    this.nextWorldRound = save.cursors.nextWorldRound ?? 0
+    this.worldChatIndex = save.cursors.worldChatIndex ?? 0
   }
 
   private simSeed(map: MapData): number {
@@ -463,11 +465,21 @@ export class GameRuntime {
 
   private maybeWorldChat(): void {
     const round = this.sim.snapshot().round
-    if (this.busy || round - this.lastWorldRound < WORLD_CHAT_INTERVAL) return
-    this.lastWorldRound = round
+    if (this.busy) return
+    if (this.nextWorldRound === 0) {
+      this.nextWorldRound = round + this.randomGap(WORLD_CHAT_INTERVAL)
+      return
+    }
+    if (round < this.nextWorldRound) return
+    this.nextWorldRound = round + this.randomGap(WORLD_CHAT_INTERVAL)
     const faction = FACTIONS[this.worldChatIndex % FACTIONS.length] ?? this.config.faction
     this.worldChatIndex += 1
     void this.broadcastWorld(faction)
+  }
+
+  /** 随机时间触发：在基准间隔的 0.5~1.5 倍之间取下一次触发回合 */
+  private randomGap(base: number): number {
+    return Math.max(1, Math.round(base * (0.5 + Math.random())))
   }
 
   private async broadcastWorld(faction: Faction): Promise<void> {
@@ -486,8 +498,12 @@ export class GameRuntime {
   private maybeAutoCommand(): void {
     if (!this.config.autoCommand || this.busy) return
     const round = this.sim.snapshot().round
-    if (round - this.lastAutoRound < this.config.autoInterval) return
-    this.lastAutoRound = round
+    if (this.nextAutoRound === 0) {
+      this.nextAutoRound = round + this.randomGap(this.config.autoInterval)
+      return
+    }
+    if (round < this.nextAutoRound) return
+    this.nextAutoRound = round + this.randomGap(this.config.autoInterval)
     void this.command(AUTO_DIRECTIVE, this.config.faction).catch(() => {
       /* a skipped or failed decision leaves the bots on their own logic */
     })
