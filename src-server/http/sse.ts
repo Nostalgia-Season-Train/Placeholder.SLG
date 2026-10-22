@@ -2,7 +2,7 @@
  * Server-sent events hub: one stream per connected browser.
  */
 import type { ServerResponse } from 'node:http'
-import type { ServerEvent } from '../../src/game/api/protocol'
+import type { ServerEvent } from '../../src-front/game/api/protocol'
 
 export class SseHub {
   private readonly clients = new Set<ServerResponse>()

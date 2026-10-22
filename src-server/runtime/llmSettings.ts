@@ -10,8 +10,8 @@ import {
   isLlmConfigured,
   type LlmClient,
   type LlmConfig,
-} from '../../src/game/agent/llm'
-import type { LlmPatch, LlmStatusDTO } from '../../src/game/api/protocol'
+} from '../../src-front/game/agent/llm'
+import type { LlmPatch, LlmStatusDTO } from '../../src-front/game/api/protocol'
 
 const SETTINGS_PATH = resolve('src-server/data/settings.json')
 

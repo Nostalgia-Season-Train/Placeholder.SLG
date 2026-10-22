@@ -2,12 +2,12 @@
  * Authoritative world runtime: owns the map, the march simulation, the AI agents,
  * chat and the tick timer. The browser only reads snapshots and posts commands.
  */
-import { generateMap, type MapData } from '../../src/game/map/MapGenerator'
-import { MarchSimulation } from '../../src/game/bot/simulation'
-import { FACTIONS, type BotOrder, type Faction } from '../../src/game/bot/types'
-import { CommanderAgent, type AgentOrderDraft } from '../../src/game/agent/commander'
-import { WarChat, type ChatChannel, type ChatMessage } from '../../src/game/agent/chat'
-import { encodeSnapshot, occupationPatch } from '../../src/game/api/codec'
+import { generateMap, type MapData } from '../../src-front/game/map/MapGenerator'
+import { MarchSimulation } from '../../src-front/game/bot/simulation'
+import { FACTIONS, type BotOrder, type Faction } from '../../src-front/game/bot/types'
+import { CommanderAgent, type AgentOrderDraft } from '../../src-front/game/agent/commander'
+import { WarChat, type ChatChannel, type ChatMessage } from '../../src-front/game/agent/chat'
+import { encodeSnapshot, occupationPatch } from '../../src-front/game/api/codec'
 import type {
   ChatLog,
   ChatResult,
@@ -19,7 +19,7 @@ import type {
   MapDTO,
   SnapshotDTO,
   WorldDTO,
-} from '../../src/game/api/protocol'
+} from '../../src-front/game/api/protocol'
 import { createLlmClient, llmStatus, updateLlm } from './llmSettings'
 import type { SseHub } from '../http/sse'
 

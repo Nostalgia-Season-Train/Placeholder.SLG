@@ -4,9 +4,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { SseHub } from './http/sse'
 import { BusyError, GameRuntime } from './runtime/GameRuntime'
-import { FACTIONS, type Faction } from '../src/game/bot/types'
-import type { ChatChannel } from '../src/game/agent/chat'
-import type { ControlPatch, LlmPatch } from '../src/game/api/protocol'
+import { FACTIONS, type Faction } from '../src-front/game/bot/types'
+import type { ChatChannel } from '../src-front/game/agent/chat'
+import type { ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
 
 const PORT = Number(process.env.SERVER_PORT ?? 8787)
 const HOST = process.env.SERVER_HOST ?? '127.0.0.1'
