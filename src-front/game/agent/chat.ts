@@ -10,6 +10,12 @@ import type { LlmClient, LlmMessage } from './llm'
 export type ChatChannel = 'world' | 'alliance' | 'team'
 export type ChatSource = 'llm' | 'mock' | 'player' | 'system'
 
+/** 同盟发言人：职位最高的角色卡（大臣优先），AI 以其名义发言 */
+export interface FactionSpokesperson {
+  position: string
+  name: string
+}
+
 export interface ChatMessage {
   id: number
   channel: ChatChannel
@@ -22,16 +28,17 @@ export interface ChatMessage {
 
 const MAX_MESSAGES = 160
 
-const ALLIANCE_PROMPT = `你是本方阵营的 AI 决策层，用简短中文回答主将的问题，给出战况判断和行动建议。
+const ALLIANCE_PROMPT = `你是本方同盟的 AI 决策层，用简短中文回答主将的问题，给出战况判断和行动建议。
 要求：不超过 60 字；不要输出 Markdown；只依据给出的战场数据，不编造坐标。`
 
-const WORLD_PROMPT = `你是本方阵营的 AI 决策层，在世界频道向其他阵营发一条简短战报或宣言。
+const WORLD_PROMPT = `你是本方同盟的 AI 决策层，在世界频道向其他同盟发一条简短战报或宣言。
 要求：不超过 30 字；态度符合本方立场；不要输出 Markdown；不要编造数据。`
 
 export class WarChat {
   private readonly messages: ChatMessage[] = []
   private nextId = 1
   private llm: LlmClient | null
+  private speakers: Partial<Record<Faction, FactionSpokesperson>> = {}
 
   constructor(
     private readonly terrain: WorldTerrain,
@@ -42,6 +49,11 @@ export class WarChat {
 
   setLlm(llm: LlmClient | null): void {
     this.llm = llm
+  }
+
+  /** 服务端在角色卡变化后刷新各同盟的发言人（职位最高者） */
+  setSpokespersons(speakers: Partial<Record<Faction, FactionSpokesperson>>): void {
+    this.speakers = speakers
   }
 
   list(channel: ChatChannel): ChatMessage[] {
@@ -71,7 +83,7 @@ export class WarChat {
     this.push({
       channel: 'alliance',
       faction,
-      author: `${FACTION_NAMES[faction]} AI`,
+      author: this.authorOf(faction),
       text: '同盟频道已建立，可直接下发指令或询问战况。',
       round,
       source: 'system',
@@ -118,7 +130,7 @@ export class WarChat {
     round: number,
     source: 'llm' | 'mock',
   ): void {
-    this.push({ channel, faction, author: `${FACTION_NAMES[faction]} AI`, text, round, source })
+    this.push({ channel, faction, author: this.authorOf(faction), text, round, source })
   }
 
   /** System line on one channel (squad order acks etc.) */
@@ -148,7 +160,7 @@ export class WarChat {
           this.push({
             channel,
             faction,
-            author: `${FACTION_NAMES[faction]} AI`,
+            author: this.authorOf(faction),
             text: clean,
             round: snapshot.round,
             source: 'llm',
@@ -163,13 +175,22 @@ export class WarChat {
     this.push({
       channel,
       faction,
-      author: `${FACTION_NAMES[faction]} AI`,
+      author: this.authorOf(faction),
       text: answerPlayer
         ? this.localAdvice(faction, snapshot)
         : this.localBroadcast(faction, snapshot),
       round: snapshot.round,
       source: 'mock',
     })
+  }
+
+  /** 作者名格式：【同盟名】职务·角色（职位为「无」时省略职务段） */
+  private authorOf(faction: Faction): string {
+    const alliance = FACTION_NAMES[faction]
+    const person = this.speakers[faction]
+    if (!person) return `【${alliance}】同盟`
+    if (!person.position || person.position === '无') return `【${alliance}】${person.name}`
+    return `【${alliance}】${person.position}·${person.name}`
   }
 
   private buildMessages(

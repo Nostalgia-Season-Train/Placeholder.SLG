@@ -335,7 +335,7 @@ export class CommanderAgent {
     const assigned = orders.filter((order) => order.target).length
     return {
       faction,
-      reply: `${FACTION_NAMES[faction]} AI（模拟）：${STANCE_LABELS[stance]}，已向 ${assigned} 个 Bot 下达指令。`,
+      reply: `（模拟）${STANCE_LABELS[stance]}，已向 ${assigned} 个 Bot 下达指令。`,
       source: 'mock',
       orders,
       error: null,

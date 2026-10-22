@@ -75,7 +75,7 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 
 function asFaction(value: unknown): Faction {
   if (typeof value === 'string' && (FACTIONS as string[]).includes(value)) return value as Faction
-  throw new HttpError(400, '未知势力')
+  throw new HttpError(400, '未知同盟')
 }
 
 function asChannel(value: unknown): ChatChannel {

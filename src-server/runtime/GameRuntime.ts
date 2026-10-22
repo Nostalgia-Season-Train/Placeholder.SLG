@@ -6,7 +6,12 @@ import { generateMap, type MapData } from '../../src-front/game/map/MapGenerator
 import { MarchSimulation } from '../../src-front/game/bot/simulation'
 import { FACTIONS, type BotOrder, type Faction } from '../../src-front/game/bot/types'
 import { CommanderAgent, type AgentOrderDraft } from '../../src-front/game/agent/commander'
-import { WarChat, type ChatChannel, type ChatMessage } from '../../src-front/game/agent/chat'
+import {
+  WarChat,
+  type ChatChannel,
+  type ChatMessage,
+  type FactionSpokesperson,
+} from '../../src-front/game/agent/chat'
 import { encodeSnapshot, occupationPatch } from '../../src-front/game/api/codec'
 import type {
   CardCreateDTO,
@@ -283,8 +288,22 @@ export class GameRuntime {
   /** Persist a new card and, when it should march, spawn it onto the map */
   createCard(input: CardCreateDTO): CardListDTO {
     const card = insertCard(input)
+    this.chatPanel.setSpokespersons(this.spokespersons())
     if (this.sim.spawnFromCard(card)) this.sendTick()
     return this.cardList()
+  }
+
+  /** 每个同盟的发言人：职位最高的角色卡（大臣优先，其次团长），聊天作者按【同盟名】职务·角色 显示 */
+  private spokespersons(): Partial<Record<Faction, FactionSpokesperson>> {
+    const rank = (position: string): number => (position === '大臣' ? 0 : position === '团长' ? 1 : 2)
+    const result: Partial<Record<Faction, FactionSpokesperson>> = {}
+    for (const card of listCards()) {
+      const existing = result[card.faction]
+      if (!existing || rank(card.position) < rank(existing.position)) {
+        result[card.faction] = { position: card.position, name: card.name }
+      }
+    }
+    return result
   }
 
   /* ------------------------------------------------------------------ */
@@ -375,6 +394,7 @@ export class GameRuntime {
     const client = createLlmClient()
     const commander = new CommanderAgent(sim.terrain, client)
     const chat = new WarChat(sim.terrain, client)
+    chat.setSpokespersons(this.spokespersons())
     chat.welcome(this.config.faction, 0)
 
     this.lastAutoRound = 0
@@ -391,6 +411,7 @@ export class GameRuntime {
     const client = createLlmClient()
     const commander = new CommanderAgent(sim.terrain, client)
     const chat = new WarChat(sim.terrain, client)
+    chat.setSpokespersons(this.spokespersons())
     chat.restoreMessages([...save.chat.world, ...save.chat.alliance, ...(save.chat.team ?? [])])
     return { map, sim, commander, chat }
   }

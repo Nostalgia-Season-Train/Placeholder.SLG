@@ -478,7 +478,7 @@ onBeforeUnmount(() => {
     <header class="panel head">
       <div class="head-title">
         <h1>大地图 · Bot 行军推演</h1>
-        <p>程序化地形 · 势力 Bot 自主选择目标、行军与占领</p>
+        <p>程序化地形 · 同盟 Bot 自主选择目标、行军与占领</p>
       </div>
       <div class="head-actions">
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>
@@ -622,7 +622,7 @@ onBeforeUnmount(() => {
 
         <div v-if="settingsTab === 'march'" class="settings-body">
           <label class="field">
-            <span>当前势力</span>
+            <span>当前同盟</span>
             <select v-model="agentFaction" @change="onFactionChange">
               <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
             </select>
@@ -664,7 +664,7 @@ onBeforeUnmount(() => {
             <input v-model="cardDraft.name" type="text" maxlength="24" placeholder="角色名称" />
           </label>
           <label class="field">
-            <span>势力</span>
+            <span>同盟</span>
             <select v-model="cardDraft.faction">
               <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
             </select>
@@ -844,11 +844,11 @@ onBeforeUnmount(() => {
             </li>
             <li>
               <span class="swatch city"></span><span class="name">城池</span>
-              <span class="ldesc">势力主城，小队由此出发</span>
+              <span class="ldesc">同盟主城，小队由此出发</span>
             </li>
           </ul>
 
-          <h3>势力与外交</h3>
+          <h3>同盟与外交</h3>
           <ul>
             <li v-for="faction in FACTIONS" :key="faction">
               <span class="swatch" :style="factionSwatchStyle(faction)"></span>
