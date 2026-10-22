@@ -184,11 +184,6 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     return
   }
 
-  if (method === 'POST' && path === '/api/step') {
-    json(response, 200, runtime.step())
-    return
-  }
-
   if (method === 'POST' && path === '/api/world/reset') {
     const body = await readJson(request)
     const seed = typeof body.seed === 'number' ? body.seed : Number(body.seed)

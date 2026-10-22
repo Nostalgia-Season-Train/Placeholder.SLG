@@ -258,20 +258,6 @@ function toggleRunning(): void {
   void control({ running: !running.value })
 }
 
-async function stepOnce(): Promise<void> {
-  try {
-    const next = await api.step()
-    // 正常情况下由 SSE 增量推送；断线时用返回的全量快照兜底
-    if (!source || source.readyState !== EventSource.OPEN) {
-      snapshot.value = decodeSnapshot(next)
-      renderScene()
-    }
-    errorMessage.value = ''
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '单步推演失败'
-  }
-}
-
 function onSpeedChange(): void {
   void control({ speed: speed.value })
 }
@@ -482,7 +468,6 @@ onBeforeUnmount(() => {
       </div>
       <div class="head-actions">
         <button type="button" @click="toggleRunning">{{ running ? '暂停' : '继续' }}</button>
-        <button type="button" @click="stepOnce">单步</button>
         <button type="button" @click="helpOpen = true">帮助</button>
         <button type="button" @click="openSettings('march')">设置</button>
       </div>

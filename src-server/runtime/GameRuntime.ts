@@ -171,12 +171,6 @@ export class GameRuntime {
     return state
   }
 
-  /** Advance exactly one round, useful while paused */
-  step(): SnapshotDTO {
-    this.advance()
-    return this.snapshot()
-  }
-
   reset(seed: number): WorldDTO {
     this.runId += 1
     this.busy = false

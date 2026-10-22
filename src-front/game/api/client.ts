@@ -52,10 +52,6 @@ export class WorldApi {
     return request<GameStateDTO>('/api/control', { method: 'POST', body: JSON.stringify(patch) })
   }
 
-  step(): Promise<SnapshotDTO> {
-    return request<SnapshotDTO>('/api/step', { method: 'POST', body: '{}' })
-  }
-
   reset(seed: number): Promise<WorldDTO> {
     return request<WorldDTO>('/api/world/reset', { method: 'POST', body: JSON.stringify({ seed }) })
   }
