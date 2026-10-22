@@ -18,3 +18,11 @@ npm run server     # 生产：同一端口托管 dist/ 与 /api
 开发时修改 `src-server/` 或服务端复用的 `src-front/game/` 内核文件会自动重启；若启动提示端口 8787 被占用，先停止旧的 `npm run dev` / `npm run server` 进程。
 
 生产模式下无需单独部署静态服务器：`src-server` 会挂载 `dist/`，未命中的客户端路由回退到 `index.html`，产物目录可用 `SLG_CLIENT_DIR` 覆盖。
+
+## 存档
+
+存档存放在 `src-server/data/save.db`（Node 内置 `node:sqlite`，无需额外依赖），该目录已在 `.gitignore` 中忽略。
+
+- 手动存档：设置界面「存档」页签命名保存、读取、删除
+- 自动续档：每 5 回合与服务退出前写入，服务启动时自动恢复；不计入手动存档列表
+

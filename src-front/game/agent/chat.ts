@@ -48,6 +48,17 @@ export class WarChat {
     return this.messages.filter((message) => message.channel === channel).slice(-80)
   }
 
+  /** Serialized message log used by the save system */
+  saveState(): ChatMessage[] {
+    return this.messages.map((message) => ({ ...message }))
+  }
+
+  restoreMessages(messages: ChatMessage[]): void {
+    this.messages.length = 0
+    for (const message of messages) this.messages.push({ ...message })
+    this.nextId = this.messages.reduce((max, message) => Math.max(max, message.id), 0) + 1
+  }
+
   welcome(faction: Faction, round: number): void {
     this.push({
       channel: 'world',

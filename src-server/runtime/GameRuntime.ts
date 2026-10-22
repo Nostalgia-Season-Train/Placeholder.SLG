@@ -17,14 +17,26 @@ import type {
   LlmPatch,
   LlmStatusDTO,
   MapDTO,
+  SaveListDTO,
   SnapshotDTO,
   WorldDTO,
+  WorldSaveDTO,
 } from '../../src-front/game/api/protocol'
 import { createLlmClient, llmStatus, updateLlm } from './llmSettings'
+import {
+  deleteSave,
+  listSaves,
+  readAutoSave,
+  readSave,
+  writeAutoSave,
+  writeSave,
+} from './saveStore'
 import type { SseHub } from '../http/sse'
 
 const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
 const WORLD_CHAT_INTERVAL = 20
+const AUTOSAVE_INTERVAL = 5
+const AUTO_SAVE_LABEL = '自动续档'
 
 interface RuntimeConfig {
   running: boolean
@@ -67,11 +79,13 @@ export class GameRuntime {
   private worldChatIndex = 0
 
   constructor(private readonly hub: SseHub) {
-    const boot = this.boot(this.config.seed)
+    const restored = readAutoSave()
+    const boot = restored ? this.bootFromSave(restored) : this.boot(this.config.seed)
     this.map = boot.map
     this.sim = boot.sim
     this.commander = boot.commander
     this.chatPanel = boot.chat
+    if (restored) console.log(`[slg] 已恢复自动续档：第 ${restored.round} 回合`)
     this.schedule()
   }
 
@@ -166,6 +180,7 @@ export class GameRuntime {
     this.lastOccupation = null
 
     const world = this.world()
+    writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
     this.hub.broadcast({ type: 'reset', world })
     this.schedule()
     return world
@@ -178,6 +193,76 @@ export class GameRuntime {
     this.chatPanel.setLlm(client)
     this.hub.broadcast({ type: 'state', state: this.state() })
     return status
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Saves                                                               */
+  /* ------------------------------------------------------------------ */
+
+  saveList(): SaveListDTO {
+    return { saves: listSaves() }
+  }
+
+  createSave(label: string): SaveListDTO {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    writeSave(id, this.captureSave(label.trim() || AUTO_SAVE_LABEL))
+    return this.saveList()
+  }
+
+  loadSave(id: string): WorldDTO {
+    const save = readSave(id)
+    if (!save) throw new Error('存档不存在或已损坏')
+
+    this.runId += 1
+    this.busy = false
+    this.stopTimer()
+
+    const boot = this.bootFromSave(save)
+    this.map = boot.map
+    this.sim = boot.sim
+    this.commander = boot.commander
+    this.chatPanel = boot.chat
+    this.lastOccupation = null
+    this.worldVersion += 1
+
+    const world = this.world()
+    this.hub.broadcast({ type: 'reset', world })
+    writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
+    this.schedule()
+    return world
+  }
+
+  removeSave(id: string): SaveListDTO {
+    if (!deleteSave(id)) throw new Error('存档不存在')
+    return this.saveList()
+  }
+
+  /** Snapshot of every mutable piece of the world, ready to persist */
+  private captureSave(label: string): WorldSaveDTO {
+    const sim = this.sim.saveState()
+    return {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      label,
+      round: sim.round,
+      state: {
+        worldVersion: this.worldVersion,
+        running: this.config.running,
+        speed: this.config.speed,
+        eventLimit: this.config.eventLimit,
+        autoCommand: this.config.autoCommand,
+        autoInterval: this.config.autoInterval,
+        faction: this.config.faction,
+        seed: this.config.seed,
+      },
+      sim,
+      chat: this.chat(),
+      cursors: {
+        lastAutoRound: this.lastAutoRound,
+        lastWorldRound: this.lastWorldRound,
+        worldChatIndex: this.worldChatIndex,
+      },
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -241,6 +326,7 @@ export class GameRuntime {
 
   dispose(): void {
     this.stopTimer()
+    writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
   }
 
   /* ------------------------------------------------------------------ */
@@ -249,7 +335,7 @@ export class GameRuntime {
 
   private boot(seed: number) {
     const map = generateMap(seed)
-    const sim = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
+    const sim = new MarchSimulation(map, this.simSeed(map))
     sim.setEventLimit(this.config.eventLimit)
     const client = createLlmClient()
     const commander = new CommanderAgent(sim.terrain, client)
@@ -260,6 +346,37 @@ export class GameRuntime {
     this.lastWorldRound = 0
     this.worldChatIndex = 0
     return { map, sim, commander, chat }
+  }
+
+  /** Rebuild the world components from a stored snapshot instead of a seed */
+  private bootFromSave(save: WorldSaveDTO) {
+    this.applySaveState(save)
+    const map = generateMap(this.config.seed)
+    const sim = new MarchSimulation(map, this.simSeed(map), save.sim)
+    const client = createLlmClient()
+    const commander = new CommanderAgent(sim.terrain, client)
+    const chat = new WarChat(sim.terrain, client)
+    chat.restoreMessages([...save.chat.world, ...save.chat.alliance])
+    return { map, sim, commander, chat }
+  }
+
+  private applySaveState(save: WorldSaveDTO): void {
+    const state = save.state
+    this.config.running = state.running
+    this.config.speed = state.speed
+    this.config.eventLimit = state.eventLimit
+    this.config.autoCommand = state.autoCommand
+    this.config.autoInterval = state.autoInterval
+    this.config.faction = state.faction
+    this.config.seed = state.seed
+    this.worldVersion = state.worldVersion
+    this.lastAutoRound = save.cursors.lastAutoRound
+    this.lastWorldRound = save.cursors.lastWorldRound
+    this.worldChatIndex = save.cursors.worldChatIndex
+  }
+
+  private simSeed(map: MapData): number {
+    return ((map.seed ^ 0x9e3779b9) >>> 0) || 1
   }
 
   private schedule(): void {
@@ -289,6 +406,9 @@ export class GameRuntime {
     this.sendTick()
     this.maybeWorldChat()
     this.maybeAutoCommand()
+    if (this.sim.snapshot().round % AUTOSAVE_INTERVAL === 0) {
+      writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
+    }
   }
 
   private maybeWorldChat(): void {

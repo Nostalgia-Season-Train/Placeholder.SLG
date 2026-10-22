@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import { SseHub } from './http/sse'
 import { serveStatic } from './http/static'
 import { BusyError, GameRuntime } from './runtime/GameRuntime'
+import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
 import { FACTIONS, type Faction } from '../src-front/game/bot/types'
 import type { ChatChannel } from '../src-front/game/agent/chat'
 import type { ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
@@ -180,6 +181,31 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     return
   }
 
+  if (method === 'GET' && path === '/api/saves') {
+    json(response, 200, runtime.saveList())
+    return
+  }
+
+  if (method === 'POST' && path === '/api/saves') {
+    const body = await readJson(request)
+    json(response, 200, runtime.createSave(asText(body.label, '存档名称')))
+    return
+  }
+
+  const saveMatch = /^\/api\/saves\/([^/]+)(\/load)?$/.exec(path)
+  if (saveMatch) {
+    const id = decodeURIComponent(saveMatch[1] ?? '')
+    if (!isValidSaveId(id)) throw new HttpError(400, '非法的存档标识')
+    if (method === 'POST' && saveMatch[2] === '/load') {
+      json(response, 200, runtime.loadSave(id))
+      return
+    }
+    if (method === 'DELETE' && saveMatch[2] === undefined) {
+      json(response, 200, runtime.removeSave(id))
+      return
+    }
+  }
+
   if ((method === 'GET' || method === 'HEAD') && !path.startsWith('/api')) {
     if (await serveStatic(CLIENT_DIR, path, method, response)) return
   }
@@ -219,6 +245,7 @@ server.listen(PORT, HOST, () => {
 function shutdown(): void {
   clearInterval(heartbeat)
   runtime.dispose()
+  closeSaveStore()
   hub.closeAll()
   server.close(() => process.exit(0))
 }

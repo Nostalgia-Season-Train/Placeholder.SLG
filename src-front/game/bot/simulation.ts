@@ -4,7 +4,7 @@
  * Hostile generals sharing a tile settle it by combat power.
  */
 import { worldToAxial } from '../map/hex'
-import { mulberry32, type MapData } from '../map/MapGenerator'
+import { createSeedRandom, type MapData, type SeedRandom } from '../map/MapGenerator'
 import { chooseTarget } from './decision'
 import { findPath } from './pathfinding'
 import {
@@ -26,6 +26,7 @@ import {
   type Faction,
   type Coord,
   type SimEvent,
+  type SimSaveState,
   type SimSnapshot,
   type GeneralState,
 } from './types'
@@ -48,8 +49,22 @@ const CITY_RADIUS_RATIO = 0.32
 /** Stances that require the bot to march to an explicit tile */
 const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
 
+function cloneGeneral(general: GeneralState): GeneralState {
+  return {
+    ...general,
+    coord: { ...general.coord },
+    personality: { ...general.personality },
+    order: general.order
+      ? { ...general.order, target: general.order.target ? { ...general.order.target } : null }
+      : null,
+    target: general.target ? { ...general.target } : null,
+    path: general.path.map((tile) => ({ ...tile })),
+  }
+}
+
 export class MarchSimulation {
   readonly terrain: WorldTerrain
+  private readonly rng: SeedRandom
   private readonly random: () => number
   private readonly cities: BaseCity[]
   private readonly generals: GeneralState[]
@@ -59,11 +74,39 @@ export class MarchSimulation {
   private occupationVersion = 0
   private eventLimit = 14
 
-  constructor(map: MapData, seed: number) {
+  constructor(map: MapData, seed: number, restore?: SimSaveState) {
     this.terrain = buildTerrain(map)
-    this.random = mulberry32((seed >>> 0) || 1)
+    this.rng = createSeedRandom((seed >>> 0) || 1)
+    this.random = () => this.rng.next()
+
+    if (restore) {
+      this.cities = restore.cities.map((city) => ({ ...city, coord: { ...city.coord } }))
+      this.generals = restore.generals.map(cloneGeneral)
+      for (const [key, faction] of restore.occupation) this.occupation.set(key, faction)
+      this.round = restore.round
+      this.occupationVersion = restore.occupationVersion
+      this.eventLimit = restore.eventLimit
+      this.events.push(...restore.events.map((event) => ({ ...event })))
+      this.rng.state = restore.rngState
+      return
+    }
+
     this.cities = this.createCities(map)
     this.generals = this.createGenerals(map)
+  }
+
+  /** Serializable mid-run state used by the save system */
+  saveState(): SimSaveState {
+    return {
+      round: this.round,
+      occupationVersion: this.occupationVersion,
+      eventLimit: this.eventLimit,
+      rngState: this.rng.state,
+      cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
+      generals: this.generals.map(cloneGeneral),
+      occupation: [...this.occupation.entries()],
+      events: this.events.map((event) => ({ ...event })),
+    }
   }
 
   /** Advance one round: every general acts in order */

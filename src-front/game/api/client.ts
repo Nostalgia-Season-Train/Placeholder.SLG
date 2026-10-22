@@ -12,6 +12,7 @@ import type {
   LlmPatch,
   LlmStatusDTO,
   MapDTO,
+  SaveListDTO,
   ServerEvent,
   SnapshotDTO,
   WorldDTO,
@@ -77,6 +78,28 @@ export class WorldApi {
 
   setLlm(patch: LlmPatch): Promise<LlmStatusDTO> {
     return request<LlmStatusDTO>('/api/llm', { method: 'PUT', body: JSON.stringify(patch) })
+  }
+
+  listSaves(): Promise<SaveListDTO> {
+    return request<SaveListDTO>('/api/saves')
+  }
+
+  createSave(label: string): Promise<SaveListDTO> {
+    return request<SaveListDTO>('/api/saves', {
+      method: 'POST',
+      body: JSON.stringify({ label }),
+    })
+  }
+
+  loadSave(id: string): Promise<WorldDTO> {
+    return request<WorldDTO>(`/api/saves/${encodeURIComponent(id)}/load`, {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  deleteSave(id: string): Promise<SaveListDTO> {
+    return request<SaveListDTO>(`/api/saves/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
 
   subscribe(onEvent: (event: ServerEvent) => void, onError?: () => void): EventSource {

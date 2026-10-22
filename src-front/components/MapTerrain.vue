@@ -8,6 +8,7 @@ import type {
   ControlPatch,
   GameStateDTO,
   LlmStatusDTO,
+  SaveSummaryDTO,
   ServerEvent,
   WorldDTO,
 } from '@/game/api/protocol'
@@ -20,7 +21,7 @@ import {
 import type { ChatMessage } from '@/game/agent/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 
-type SettingsTab = 'march' | 'log' | 'llm'
+type SettingsTab = 'march' | 'save' | 'log' | 'llm'
 
 const api = new WorldApi()
 const host = ref<HTMLDivElement | null>(null)
@@ -49,6 +50,10 @@ const allianceMessages = ref<ChatMessage[]>([])
 const llmStatus = ref<LlmStatusDTO | null>(null)
 const llmDraft = ref({ baseUrl: '', model: '', apiKey: '' })
 const hasSavedKey = computed(() => llmStatus.value?.hasApiKey ?? false)
+const saves = ref<SaveSummaryDTO[]>([])
+const saveLabel = ref('')
+const saveBusy = ref(false)
+const savesLoading = ref(false)
 const errorMessage = ref('')
 let lastOccupationVersion = -1
 let source: EventSource | null = null
@@ -281,6 +286,76 @@ async function resetWorld(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* 存档                                                                */
+/* ------------------------------------------------------------------ */
+
+function defaultSaveLabel(): string {
+  const now = new Date()
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+}
+
+function formatSavedAt(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+async function refreshSaves(): Promise<void> {
+  savesLoading.value = true
+  try {
+    saves.value = (await api.listSaves()).saves
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '读取存档列表失败'
+  } finally {
+    savesLoading.value = false
+  }
+}
+
+async function createSave(): Promise<void> {
+  if (saveBusy.value) return
+  saveBusy.value = true
+  try {
+    saves.value = (await api.createSave(saveLabel.value.trim() || defaultSaveLabel())).saves
+    saveLabel.value = ''
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '保存失败'
+  } finally {
+    saveBusy.value = false
+  }
+}
+
+async function loadSave(id: string): Promise<void> {
+  if (saveBusy.value) return
+  saveBusy.value = true
+  try {
+    const world = await api.loadSave(id)
+    applyWorld(world)
+    renderer.value?.setMap(decodeMap(world.map))
+    renderScene()
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '读取存档失败'
+  } finally {
+    saveBusy.value = false
+  }
+}
+
+async function removeSave(id: string): Promise<void> {
+  if (saveBusy.value) return
+  if (!window.confirm('确认删除该存档？')) return
+  saveBusy.value = true
+  try {
+    saves.value = (await api.deleteSave(id)).saves
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '删除存档失败'
+  } finally {
+    saveBusy.value = false
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -306,6 +381,10 @@ watch(chatTab, async (tab) => {
   if (tab !== 'log' || !autoScrollLog.value) return
   await nextTick()
   if (logList.value) logList.value.scrollTop = 0
+})
+
+watch([settingsOpen, settingsTab], ([open, tab]) => {
+  if (open && tab === 'save') void refreshSaves()
 })
 
 onMounted(async () => {
@@ -476,6 +555,13 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
+            :class="{ active: settingsTab === 'save' }"
+            @click="settingsTab = 'save'"
+          >
+            存档
+          </button>
+          <button
+            type="button"
             :class="{ active: settingsTab === 'log' }"
             @click="settingsTab = 'log'"
           >
@@ -528,6 +614,35 @@ onBeforeUnmount(() => {
           <p class="meta">重新生成会清空当前推演进度与行军日志。</p>
         </div>
 
+        <div v-else-if="settingsTab === 'save'" class="settings-body">
+          <label class="field">
+            <span>存档名称</span>
+            <input v-model="saveLabel" type="text" :placeholder="defaultSaveLabel()" />
+          </label>
+          <div class="settings-actions">
+            <button type="button" :disabled="saveBusy" @click="createSave">保存当前进度</button>
+            <span class="meta">{{ savesLoading ? '读取中…' : `共 ${saves.length} 个存档` }}</span>
+          </div>
+          <ul v-if="saves.length" class="save-list">
+            <li v-for="item in saves" :key="item.id">
+              <div class="save-info">
+                <strong>{{ item.label }}</strong>
+                <span class="meta">
+                  第 {{ item.round }} 回合 · {{ formatSavedAt(item.savedAt) }} · 种子 {{ item.seed }}
+                </span>
+              </div>
+              <div class="save-actions">
+                <button type="button" :disabled="saveBusy" @click="loadSave(item.id)">读取</button>
+                <button type="button" :disabled="saveBusy" @click="removeSave(item.id)">删除</button>
+              </div>
+            </li>
+          </ul>
+          <p v-else-if="!savesLoading" class="meta">暂无手动存档。</p>
+          <p class="meta">
+            服务端每 5 回合与退出时自动续档，重启后自动恢复上次进度；手动存档不会被自动覆盖。
+          </p>
+        </div>
+
         <div v-else-if="settingsTab === 'log'" class="settings-body">
           <label class="field">
             <span>显示条数</span>
@@ -545,7 +660,7 @@ onBeforeUnmount(() => {
           <p class="meta">战况日志位于左下「通讯 · 行军」页签，最新记录显示在最上方。</p>
         </div>
 
-        <div v-else class="settings-body">
+        <div v-else-if="settingsTab === 'llm'" class="settings-body">
           <label class="field">
             <span>baseUrl</span>
             <input
@@ -1218,6 +1333,63 @@ onBeforeUnmount(() => {
 
 .settings-actions .meta {
   margin-top: 0;
+}
+
+.save-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.save-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(8, 13, 17, 0.6);
+}
+
+.save-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.save-info strong {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e9e4d6;
+}
+
+.save-info .meta {
+  margin-top: 0;
+}
+
+.save-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.save-actions button {
+  border: 1px solid rgba(214, 186, 122, 0.4);
+  border-radius: 5px;
+  padding: 4px 9px;
+  background: transparent;
+  color: #c8b98e;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.save-actions button:disabled,
+.settings-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .help-dialog {

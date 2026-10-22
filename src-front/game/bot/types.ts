@@ -104,3 +104,15 @@ export interface SimSnapshot {
   capturableCount: number
   factionCounts: Record<Faction, number>
 }
+
+/** Serializable mid-run state, enough to resume round by round */
+export interface SimSaveState {
+  round: number
+  occupationVersion: number
+  eventLimit: number
+  rngState: number
+  cities: BaseCity[]
+  generals: GeneralState[]
+  occupation: [string, Faction][]
+  events: SimEvent[]
+}

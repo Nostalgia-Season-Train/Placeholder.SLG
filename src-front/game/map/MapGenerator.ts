@@ -36,14 +36,29 @@ export interface MapData {
 /* 随机数与噪声                                                        */
 /* ------------------------------------------------------------------ */
 
-export function mulberry32(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+export interface SeedRandom {
+  /** Internal counter; serializable so a save can resume the exact sequence */
+  state: number
+  next(): number
+}
+
+/** Deterministic random source whose state can be captured in a save */
+export function createSeedRandom(seed: number): SeedRandom {
+  const rng: SeedRandom = {
+    state: seed >>> 0,
+    next() {
+      rng.state = (rng.state + 0x6d2b79f5) | 0
+      let t = Math.imul(rng.state ^ (rng.state >>> 15), 1 | rng.state)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    },
   }
+  return rng
+}
+
+export function mulberry32(seed: number): () => number {
+  const rng = createSeedRandom(seed)
+  return () => rng.next()
 }
 
 /** 每个地块独立的确定性随机源，保证装饰物布局稳定 */

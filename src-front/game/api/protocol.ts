@@ -3,7 +3,7 @@
  * Types only — importing this module never pulls runtime code.
  */
 import type { ChatChannel, ChatMessage } from '../agent/chat'
-import type { Faction, SimSnapshot } from '../bot/types'
+import type { Faction, SimSaveState, SimSnapshot } from '../bot/types'
 import type { MapData } from '../map/MapGenerator'
 
 /** MapData without the runtime lookup table; the client rebuilds it from tiles */
@@ -71,6 +71,37 @@ export interface CommandResult {
 
 export interface ChatResult {
   messages: ChatMessage[]
+}
+
+/** Cursors the runtime keeps between rounds, saved so AI cadence resumes intact */
+export interface SaveCursorsDTO {
+  lastAutoRound: number
+  lastWorldRound: number
+  worldChatIndex: number
+}
+
+/** Full snapshot of one world, stored as a single save row */
+export interface WorldSaveDTO {
+  version: 1
+  savedAt: string
+  label: string
+  round: number
+  state: Omit<GameStateDTO, 'llmConfigured'>
+  sim: SimSaveState
+  chat: ChatLog
+  cursors: SaveCursorsDTO
+}
+
+export interface SaveSummaryDTO {
+  id: string
+  label: string
+  savedAt: string
+  round: number
+  seed: number
+}
+
+export interface SaveListDTO {
+  saves: SaveSummaryDTO[]
 }
 
 export type ServerEvent =
