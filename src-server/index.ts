@@ -198,6 +198,15 @@ const server = createServer((request, response) => {
 
 const heartbeat = setInterval(() => hub.heartbeat(), 15_000)
 
+server.on('error', (error: NodeJS.ErrnoException) => {
+  const reason =
+    error.code === 'EADDRINUSE'
+      ? `端口 ${PORT} 已被占用，请先停止旧的 npm run dev 或 npm run server 进程`
+      : '服务启动失败'
+  console.error(`[slg] ${reason}：`, error)
+  process.exit(1)
+})
+
 server.listen(PORT, HOST, () => {
   console.log(`[slg] 后端推演服务已启动：http://${HOST}:${PORT}`)
   console.log(
