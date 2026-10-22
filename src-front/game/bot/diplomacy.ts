@@ -13,11 +13,11 @@ export type FactionRelation =
   | 'friendlyAlliance'
 
 export const RELATION_LABELS: Record<FactionRelation, string> = {
-  self: '我方',
-  ally: '同盟友军',
-  neutral: '非敌军非我方',
-  hostileAlliance: '敌对同盟',
-  friendlyAlliance: '友好同盟',
+  self: '我方核心团',
+  ally: '我方同盟',
+  neutral: '非友方非敌方',
+  hostileAlliance: '敌方同盟',
+  friendlyAlliance: '友方同盟',
 }
 
 export interface RelationStyle {

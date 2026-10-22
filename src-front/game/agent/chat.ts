@@ -7,7 +7,7 @@ import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
 import { FACTIONS, FACTION_NAMES, type Faction, type SimSnapshot } from '../bot/types'
 import type { LlmClient, LlmMessage } from './llm'
 
-export type ChatChannel = 'world' | 'alliance'
+export type ChatChannel = 'world' | 'alliance' | 'team'
 export type ChatSource = 'llm' | 'mock' | 'player' | 'system'
 
 export interface ChatMessage {
@@ -76,6 +76,14 @@ export class WarChat {
       round,
       source: 'system',
     })
+    this.push({
+      channel: 'team',
+      faction,
+      author: '团部',
+      text: '本团频道已建立，此处军令直达 Bot，不经 AI 决策层。',
+      round,
+      source: 'system',
+    })
   }
 
   /** Player speech: a world message may draw a reply from another faction, alliance goes to own agent */
@@ -111,6 +119,11 @@ export class WarChat {
     source: 'llm' | 'mock',
   ): void {
     this.push({ channel, faction, author: `${FACTION_NAMES[faction]} AI`, text, round, source })
+  }
+
+  /** System line on one channel (squad order acks etc.) */
+  postSystem(channel: ChatChannel, text: string, round: number): void {
+    this.push({ channel, faction: null, author: '团部', text, round, source: 'system' })
   }
 
   /** Periodic world broadcast from one faction AI */

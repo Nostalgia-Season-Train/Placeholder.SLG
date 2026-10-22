@@ -130,7 +130,11 @@ export class GameRuntime {
   }
 
   chat(): ChatLog {
-    return { world: this.chatPanel.list('world'), alliance: this.chatPanel.list('alliance') }
+    return {
+      world: this.chatPanel.list('world'),
+      alliance: this.chatPanel.list('alliance'),
+      team: this.chatPanel.list('team'),
+    }
   }
 
   isBusy(): boolean {
@@ -313,6 +317,18 @@ export class GameRuntime {
   }
 
   async chatSend(channel: ChatChannel, text: string, faction: Faction): Promise<ChatResult> {
+    // 本团频道：军令直达 Bot，本地同步解析，不经 AI 决策层，不受 busy 锁限制
+    if (channel === 'team') {
+      const snapshot = this.sim.snapshot()
+      this.chatPanel.postPlayer(channel, text, faction, snapshot.round)
+      const decision = this.commander.directDecision(text, faction, snapshot)
+      const applied = this.applyOrders(decision.orders, snapshot.round)
+      this.chatPanel.postSystem(channel, decision.reply, snapshot.round)
+      this.broadcastChat(channel)
+      if (applied > 0) this.sendTick()
+      return { messages: this.chatPanel.list(channel) }
+    }
+
     if (this.busy) throw new BusyError()
     this.busy = true
     const runId = this.runId
@@ -375,7 +391,7 @@ export class GameRuntime {
     const client = createLlmClient()
     const commander = new CommanderAgent(sim.terrain, client)
     const chat = new WarChat(sim.terrain, client)
-    chat.restoreMessages([...save.chat.world, ...save.chat.alliance])
+    chat.restoreMessages([...save.chat.world, ...save.chat.alliance, ...(save.chat.team ?? [])])
     return { map, sim, commander, chat }
   }
 

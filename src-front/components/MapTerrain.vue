@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@/game/api/codec'
@@ -26,7 +26,7 @@ import {
 import type { ChatMessage } from '@/game/agent/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 
-type SettingsTab = 'march' | 'card' | 'save' | 'log' | 'llm'
+type SettingsTab = 'march' | 'card' | 'save' | 'llm'
 
 const api = new WorldApi()
 const host = ref<HTMLDivElement | null>(null)
@@ -43,14 +43,12 @@ const settingsTab = ref<SettingsTab>('march')
 const helpOpen = ref(false)
 const autoInterval = ref(10)
 const autoCommand = ref(true)
-const logLimit = ref(14)
-const autoScrollLog = ref(true)
-const logList = ref<HTMLUListElement | null>(null)
 const agentFaction = ref<Faction>('red')
 const chatBusy = ref(false)
-const chatTab = ref<'world' | 'alliance' | 'log'>('world')
+const chatTab = ref<'world' | 'alliance' | 'team'>('world')
 const chatDraft = ref('')
 const worldMessages = ref<ChatMessage[]>([])
+const teamMessages = ref<ChatMessage[]>([])
 const allianceMessages = ref<ChatMessage[]>([])
 const llmStatus = ref<LlmStatusDTO | null>(null)
 const llmDraft = ref({ baseUrl: '', model: '', apiKey: '' })
@@ -103,12 +101,14 @@ function factionRelationLabel(faction: Faction): string {
 const chatMessages = computed<ChatMessage[]>(() => {
   if (chatTab.value === 'world') return worldMessages.value
   if (chatTab.value === 'alliance') return allianceMessages.value
-  return []
+  return teamMessages.value
 })
 
-const chatPlaceholder = computed(() =>
-  chatTab.value === 'world' ? '向世界频道发言（所有 AI）' : '向本方 AI 询问或下令',
-)
+const chatPlaceholder = computed(() => {
+  if (chatTab.value === 'world') return '向世界频道发言（所有 AI）'
+  if (chatTab.value === 'team') return '向本团 Bot 直接下达军令（不经 AI）'
+  return '向本方 AI 询问或下令'
+})
 
 /* ------------------------------------------------------------------ */
 /* 服务端状态                                                          */
@@ -125,6 +125,7 @@ function applyWorld(world: WorldDTO): void {
   const state = world.state
   snapshot.value = decodeSnapshot(world.snapshot)
   worldMessages.value = world.chat.world
+  teamMessages.value = world.chat.team
   allianceMessages.value = world.chat.alliance
   seed.value = state.seed
   seedDraft.value = String(state.seed)
@@ -132,7 +133,6 @@ function applyWorld(world: WorldDTO): void {
   speed.value = state.speed
   autoCommand.value = state.autoCommand
   autoInterval.value = state.autoInterval
-  logLimit.value = state.eventLimit
   agentFaction.value = state.faction
   setLlmStatus(world.llm)
   lastOccupationVersion = -1
@@ -143,7 +143,6 @@ function applyState(state: GameStateDTO): void {
   speed.value = state.speed
   autoCommand.value = state.autoCommand
   autoInterval.value = state.autoInterval
-  logLimit.value = state.eventLimit
   if (state.faction !== agentFaction.value) {
     agentFaction.value = state.faction
     lastOccupationVersion = -1
@@ -191,6 +190,7 @@ function onServerEvent(event: ServerEvent): void {
       break
     case 'chat':
       if (event.channel === 'world') worldMessages.value = event.messages
+      else if (event.channel === 'team') teamMessages.value = event.messages
       else allianceMessages.value = event.messages
       break
     case 'reset':
@@ -217,13 +217,14 @@ async function control(patch: ControlPatch): Promise<void> {
 async function sendChat(): Promise<void> {
   const channel = chatTab.value
   const text = chatDraft.value.trim()
-  if (!text || chatBusy.value || channel === 'log') return
+  if (!text || chatBusy.value) return
 
   chatDraft.value = ''
   chatBusy.value = true
   try {
     const result = await api.chat(channel, text, agentFaction.value)
     if (channel === 'world') worldMessages.value = result.messages
+    else if (channel === 'team') teamMessages.value = result.messages
     else allianceMessages.value = result.messages
     errorMessage.value = ''
   } catch (error) {
@@ -428,25 +429,6 @@ function openSettings(tab: SettingsTab): void {
   settingsOpen.value = true
 }
 
-function onLogLimitChange(): void {
-  void control({ eventLimit: logLimit.value })
-}
-
-watch(
-  () => snapshot.value?.events,
-  async () => {
-    if (!autoScrollLog.value || chatTab.value !== 'log') return
-    await nextTick()
-    if (logList.value) logList.value.scrollTop = 0
-  },
-)
-
-watch(chatTab, async (tab) => {
-  if (tab !== 'log' || !autoScrollLog.value) return
-  await nextTick()
-  if (logList.value) logList.value.scrollTop = 0
-})
-
 watch([settingsOpen, settingsTab], ([open, tab]) => {
   if (open && tab === 'save') void refreshSaves()
   if (open && tab === 'card') {
@@ -562,25 +544,19 @@ onBeforeUnmount(() => {
         >
           同盟
         </button>
-        <button type="button" :class="{ active: chatTab === 'log' }" @click="chatTab = 'log'">
-          行军
+        <button
+          type="button"
+          :class="{ active: chatTab === 'team' }"
+          @click="chatTab = 'team'"
+        >
+          本团
         </button>
         <span class="tabhint">
-          {{ chatTab === 'world' ? '世界频道' : chatTab === 'alliance' ? '同盟频道' : '行军日志' }}
+          {{ chatTab === 'world' ? '世界频道' : chatTab === 'alliance' ? '同盟频道' : '本团频道' }}
         </span>
       </div>
 
-      <ul v-if="chatTab === 'log'" ref="logList" class="log-list">
-        <li v-for="(e, i) in snapshot?.events ?? []" :key="i">
-          <span class="round">{{ e.round }}</span>
-          <span class="logtext" :style="e.faction ? { color: relationColorCss(e.faction) } : undefined">
-            {{ e.text }}
-          </span>
-        </li>
-        <li v-if="!(snapshot?.events.length)" class="empty">推演进行中…</li>
-      </ul>
-
-      <template v-else>
+      <div class="chat-pane">
         <ul class="chat-list">
           <li v-for="m in chatMessages" :key="m.id" :class="{ mine: m.source === 'player' }">
             <div class="chat-head">
@@ -603,7 +579,7 @@ onBeforeUnmount(() => {
             {{ chatBusy ? '…' : '发送' }}
           </button>
         </div>
-      </template>
+      </div>
     </section>
 
     <div v-if="settingsOpen" class="settings-mask" @click.self="settingsOpen = false">
@@ -634,13 +610,6 @@ onBeforeUnmount(() => {
             @click="settingsTab = 'save'"
           >
             存档
-          </button>
-          <button
-            type="button"
-            :class="{ active: settingsTab === 'log' }"
-            @click="settingsTab = 'log'"
-          >
-            战况日志
           </button>
           <button
             type="button"
@@ -686,7 +655,7 @@ onBeforeUnmount(() => {
             <button type="button" @click="resetWorld">按种子重新生成</button>
             <span class="meta">当前种子 {{ seed }}</span>
           </div>
-          <p class="meta">重新生成会清空当前推演进度与行军日志。</p>
+          <p class="meta">重新生成会清空当前推演进度与频道消息。</p>
         </div>
 
         <div v-else-if="settingsTab === 'card'" class="settings-body">
@@ -807,23 +776,6 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
-        <div v-else-if="settingsTab === 'log'" class="settings-body">
-          <label class="field">
-            <span>显示条数</span>
-            <select v-model.number="logLimit" @change="onLogLimitChange">
-              <option :value="10">10 条</option>
-              <option :value="14">14 条</option>
-              <option :value="20">20 条</option>
-              <option :value="30">30 条</option>
-            </select>
-          </label>
-          <label class="field check">
-            <span>自动滚动</span>
-            <input v-model="autoScrollLog" type="checkbox" />
-          </label>
-          <p class="meta">战况日志位于左下「通讯 · 行军」页签，最新记录显示在最上方。</p>
-        </div>
-
         <div v-else-if="settingsTab === 'llm'" class="settings-body">
           <label class="field">
             <span>baseUrl</span>
@@ -906,9 +858,14 @@ onBeforeUnmount(() => {
           </ul>
 
           <h3>行军与占领</h3>
-          <p>武将自主选择目标并寻路，抵达后持续占领；敌对单位同格时发生遭遇战，败者撤退并休整。</p>
+          <p>角色自主选择目标并寻路，抵达后持续占领；敌对单位同格时发生遭遇战，败者撤退并休整。</p>
 
           <h3>测试提示词</h3>
+          <p>在「本团」频道发送，军令直达本方 Bot，本地解析、不经 AI 决策层，语法与同盟指令相同：</p>
+          <ul>
+            <li><span class="name">全员向北进攻</span><span class="ldesc">直接下达，立即执行</span></li>
+            <li><span class="name">进攻 12,8</span><span class="ldesc">指定轴向坐标目标</span></li>
+          </ul>
           <p>在「同盟」频道发送，等同向本方 AI 下达指令：</p>
           <ul>
             <li><span class="name">向北进攻</span><span class="ldesc">全体向北推进</span></li>
@@ -919,7 +876,7 @@ onBeforeUnmount(() => {
             <li><span class="name">自由行动</span><span class="ldesc">由 Bot 自主选择地块</span></li>
             <li><span class="name">进攻 12,8</span><span class="ldesc">指定轴向坐标目标</span></li>
           </ul>
-          <p>在「世界」频道发送，只触发对话，不改变武将指令：</p>
+          <p>在「世界」频道发送，只触发对话，不改变角色指令：</p>
           <ul>
             <li><span class="name">报一下当前战况</span></li>
             <li><span class="name">你们下一步打算往哪打？</span></li>
@@ -1141,7 +1098,6 @@ onBeforeUnmount(() => {
 }
 
 .chat-list,
-.log-list,
 .settings-body,
 .help-body {
   overscroll-behavior: contain;
@@ -1150,7 +1106,6 @@ onBeforeUnmount(() => {
 }
 
 .chat-list::-webkit-scrollbar,
-.log-list::-webkit-scrollbar,
 .settings-body::-webkit-scrollbar,
 .help-body::-webkit-scrollbar {
   width: 6px;
@@ -1158,18 +1113,15 @@ onBeforeUnmount(() => {
 }
 
 .chat-list::-webkit-scrollbar-track,
-.log-list::-webkit-scrollbar-track,
 .settings-body::-webkit-scrollbar-track,
 .help-body::-webkit-scrollbar-track,
 .chat-list::-webkit-scrollbar-corner,
-.log-list::-webkit-scrollbar-corner,
 .settings-body::-webkit-scrollbar-corner,
 .help-body::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 .chat-list::-webkit-scrollbar-thumb,
-.log-list::-webkit-scrollbar-thumb,
 .settings-body::-webkit-scrollbar-thumb,
 .help-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
@@ -1177,7 +1129,6 @@ onBeforeUnmount(() => {
 }
 
 .chat-list::-webkit-scrollbar-thumb:hover,
-.log-list::-webkit-scrollbar-thumb:hover,
 .settings-body::-webkit-scrollbar-thumb:hover,
 .help-body::-webkit-scrollbar-thumb:hover {
   background: rgba(214, 186, 122, 0.55);
@@ -1242,6 +1193,13 @@ onBeforeUnmount(() => {
   margin-left: auto;
   font-size: 10px;
   color: #6f7f84;
+}
+
+.chat-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-list {
@@ -1321,34 +1279,6 @@ onBeforeUnmount(() => {
 .chat-input button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.log-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  list-style: none;
-}
-
-.log-list li {
-  display: flex;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.log-list .round {
-  flex: none;
-  min-width: 24px;
-  color: #6f7f84;
-  font-variant-numeric: tabular-nums;
-}
-
-.logtext {
-  color: #cfd6d3;
 }
 
 .hint {

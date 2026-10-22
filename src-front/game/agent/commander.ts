@@ -156,6 +156,18 @@ export class CommanderAgent {
     return this.mockDecision(directive, faction, snapshot)
   }
 
+  /**
+   * Core-squad channel: parse the directive locally and never touch the LLM.
+   * The player directly commands the squad's bots (see docs/同盟关系.md).
+   */
+  directDecision(directive: string, faction: Faction, snapshot: SimSnapshot): AgentDecision {
+    const decision = this.mockDecision(directive, faction, snapshot)
+    decision.source = 'mock'
+    const assigned = decision.orders.filter((order) => order.target).length
+    decision.reply = `军令已下达：${decision.orders.length} 个 Bot 接令，${assigned} 个锁定目标。`
+    return decision
+  }
+
   /* ------------------------------------------------------------------ */
   /* LLM path                                                            */
   /* ------------------------------------------------------------------ */

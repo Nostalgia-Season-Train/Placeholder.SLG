@@ -17,6 +17,7 @@ export type SnapshotDTO = Omit<SimSnapshot, 'occupation'> & {
 export interface ChatLog {
   world: ChatMessage[]
   alliance: ChatMessage[]
+  team: ChatMessage[]
 }
 
 export interface LlmStatusDTO {

@@ -79,7 +79,7 @@ function asFaction(value: unknown): Faction {
 }
 
 function asChannel(value: unknown): ChatChannel {
-  if (value === 'world' || value === 'alliance') return value
+  if (value === 'world' || value === 'alliance' || value === 'team') return value
   throw new HttpError(400, '未知频道')
 }
 
@@ -144,7 +144,9 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   if (method === 'GET' && path === '/api/chat') {
     const channel = asChannel(url.searchParams.get('channel') ?? 'world')
     const log = runtime.chat()
-    json(response, 200, { messages: channel === 'world' ? log.world : log.alliance })
+    json(response, 200, {
+      messages: channel === 'world' ? log.world : channel === 'team' ? log.team : log.alliance,
+    })
     return
   }
 
