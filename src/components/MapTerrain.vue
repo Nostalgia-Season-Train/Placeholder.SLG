@@ -931,6 +931,55 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
+.status,
+.chat-list,
+.log-list,
+.settings-body,
+.help-body {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 185, 142, 0.32) transparent;
+}
+
+.status::-webkit-scrollbar,
+.chat-list::-webkit-scrollbar,
+.log-list::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar,
+.help-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.status::-webkit-scrollbar-track,
+.chat-list::-webkit-scrollbar-track,
+.log-list::-webkit-scrollbar-track,
+.settings-body::-webkit-scrollbar-track,
+.help-body::-webkit-scrollbar-track,
+.status::-webkit-scrollbar-corner,
+.chat-list::-webkit-scrollbar-corner,
+.log-list::-webkit-scrollbar-corner,
+.settings-body::-webkit-scrollbar-corner,
+.help-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.status::-webkit-scrollbar-thumb,
+.chat-list::-webkit-scrollbar-thumb,
+.log-list::-webkit-scrollbar-thumb,
+.settings-body::-webkit-scrollbar-thumb,
+.help-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(200, 185, 142, 0.28);
+}
+
+.status::-webkit-scrollbar-thumb:hover,
+.chat-list::-webkit-scrollbar-thumb:hover,
+.log-list::-webkit-scrollbar-thumb:hover,
+.settings-body::-webkit-scrollbar-thumb:hover,
+.help-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(214, 186, 122, 0.55);
+}
+
 .status h2 {
   margin-bottom: 8px;
   font-size: 12px;
@@ -1318,6 +1367,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   margin-top: 14px;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -1384,6 +1434,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
   margin-top: 14px;
+  min-height: 0;
   overflow: auto;
 }
 
