@@ -53,7 +53,7 @@ export class WarChat {
       channel: 'world',
       faction: null,
       author: '系统',
-      text: '世界频道已接入三方 AI。',
+      text: '世界频道已开放。',
       round,
       source: 'system',
     })
