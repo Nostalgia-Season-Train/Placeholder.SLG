@@ -2,6 +2,9 @@
  * March simulation data model.
  * Factions, generals, tile ownership, events and snapshots live here.
  * This module has no dependency on the rendering layer.
+ *
+ * 术语说明：General / generals 为遗留命名，指「角色」——由角色卡驱动的地图单位。
+ * 「武将」仅是角色卡四种定位（武将 / 术武将 / 法师 / 疗愈师）之一，不是地图单位的通称。
  */
 export type Faction = 'red' | 'cyan' | 'gold'
 
