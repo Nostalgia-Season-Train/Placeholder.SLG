@@ -8,9 +8,19 @@ import { SseHub } from './http/sse'
 import { serveStatic } from './http/static'
 import { BusyError, GameRuntime } from './runtime/GameRuntime'
 import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
-import { FACTIONS, type Faction } from '../src-front/game/bot/types'
+import { closeCardStore } from './runtime/cardStore'
+import {
+  FACTIONS,
+  GENERAL_POSITIONS,
+  GENERAL_ROLES,
+  STAT_GRADES,
+  type Faction,
+  type GeneralPosition,
+  type GeneralRole,
+  type StatGrade,
+} from '../src-front/game/bot/types'
 import type { ChatChannel } from '../src-front/game/agent/chat'
-import type { ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
+import type { CardCreateDTO, ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
 
 const PORT = Number(process.env.SERVER_PORT ?? 8787)
 const HOST = process.env.SERVER_HOST ?? '127.0.0.1'
@@ -76,6 +86,27 @@ function asChannel(value: unknown): ChatChannel {
 function asText(value: unknown, label: string): string {
   if (typeof value === 'string' && value.trim()) return value.trim()
   throw new HttpError(400, `${label}不能为空`)
+}
+
+function asRole(value: unknown): GeneralRole {
+  if (typeof value === 'string' && (GENERAL_ROLES as readonly string[]).includes(value)) {
+    return value as GeneralRole
+  }
+  throw new HttpError(400, '未知定位')
+}
+
+function asPosition(value: unknown): GeneralPosition {
+  if (typeof value === 'string' && (GENERAL_POSITIONS as readonly string[]).includes(value)) {
+    return value as GeneralPosition
+  }
+  throw new HttpError(400, '未知职位')
+}
+
+function asGrade(value: unknown): StatGrade {
+  if (typeof value === 'string' && (STAT_GRADES as readonly string[]).includes(value)) {
+    return value as StatGrade
+  }
+  throw new HttpError(400, '未知档位')
 }
 
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -206,6 +237,32 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
   }
 
+  if (method === 'GET' && path === '/api/cards') {
+    json(response, 200, runtime.cardList())
+    return
+  }
+
+  if (method === 'POST' && path === '/api/cards') {
+    const body = await readJson(request)
+    const input: CardCreateDTO = {
+      name: asText(body.name, '名称').slice(0, 24),
+      faction: asFaction(body.faction),
+      role: asRole(body.role),
+      position: asPosition(body.position),
+      attack: asGrade(body.attack),
+      magic: asGrade(body.magic),
+      personality:
+        typeof body.personality === 'string' ? body.personality.trim().slice(0, 120) : '',
+    }
+    if (typeof body.description === 'string') input.description = body.description.slice(0, 2000)
+    if (typeof body.dialoguePrompt === 'string') {
+      input.dialoguePrompt = body.dialoguePrompt.slice(0, 2000)
+    }
+    if (typeof body.authorNote === 'string') input.authorNote = body.authorNote.slice(0, 2000)
+    json(response, 200, runtime.createCard(input))
+    return
+  }
+
   if ((method === 'GET' || method === 'HEAD') && !path.startsWith('/api')) {
     if (await serveStatic(CLIENT_DIR, path, method, response)) return
   }
@@ -246,6 +303,7 @@ function shutdown(): void {
   clearInterval(heartbeat)
   runtime.dispose()
   closeSaveStore()
+  closeCardStore()
   hub.closeAll()
   server.close(() => process.exit(0))
 }

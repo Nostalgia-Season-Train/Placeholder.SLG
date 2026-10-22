@@ -5,6 +5,8 @@
 import type { ChatChannel } from '../agent/chat'
 import type { Faction } from '../bot/types'
 import type {
+  CardCreateDTO,
+  CardListDTO,
   ChatResult,
   CommandResult,
   ControlPatch,
@@ -100,6 +102,17 @@ export class WorldApi {
 
   deleteSave(id: string): Promise<SaveListDTO> {
     return request<SaveListDTO>(`/api/saves/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  listCards(): Promise<CardListDTO> {
+    return request<CardListDTO>('/api/cards')
+  }
+
+  createCard(payload: CardCreateDTO): Promise<CardListDTO> {
+    return request<CardListDTO>('/api/cards', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
   }
 
   subscribe(onEvent: (event: ServerEvent) => void, onError?: () => void): EventSource {

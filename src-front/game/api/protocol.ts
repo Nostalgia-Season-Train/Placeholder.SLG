@@ -3,7 +3,7 @@
  * Types only — importing this module never pulls runtime code.
  */
 import type { ChatChannel, ChatMessage } from '../agent/chat'
-import type { Faction, SimSaveState, SimSnapshot } from '../bot/types'
+import type { CardSpawn, Faction, SimSaveState, SimSnapshot } from '../bot/types'
 import type { MapData } from '../map/MapGenerator'
 
 /** MapData without the runtime lookup table; the client rebuilds it from tiles */
@@ -102,6 +102,25 @@ export interface SaveSummaryDTO {
 
 export interface SaveListDTO {
   saves: SaveSummaryDTO[]
+}
+
+/** One persisted character card; spawn-relevant fields come from CardSpawn */
+export interface CharacterCardDTO extends CardSpawn {
+  description: string
+  dialoguePrompt: string
+  authorNote: string
+  builtin: boolean
+}
+
+export interface CardListDTO {
+  cards: CharacterCardDTO[]
+}
+
+/** Body of POST /api/cards; the server assigns id and created time */
+export interface CardCreateDTO extends Omit<CardSpawn, 'id'> {
+  description?: string
+  dialoguePrompt?: string
+  authorNote?: string
 }
 
 export type ServerEvent =

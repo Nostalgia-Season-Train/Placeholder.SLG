@@ -5,6 +5,8 @@ import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@/game/api/codec'
 import { WorldApi } from '@/game/api/client'
 import type {
+  CardCreateDTO,
+  CharacterCardDTO,
   ControlPatch,
   GameStateDTO,
   LlmStatusDTO,
@@ -15,13 +17,16 @@ import type {
 import {
   FACTIONS,
   FACTION_NAMES,
+  GENERAL_POSITIONS,
+  GENERAL_ROLES,
+  STAT_GRADES,
   type Faction,
   type SimSnapshot,
 } from '@/game/bot/types'
 import type { ChatMessage } from '@/game/agent/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 
-type SettingsTab = 'march' | 'save' | 'log' | 'llm'
+type SettingsTab = 'march' | 'card' | 'save' | 'log' | 'llm'
 
 const api = new WorldApi()
 const host = ref<HTMLDivElement | null>(null)
@@ -54,6 +59,18 @@ const saves = ref<SaveSummaryDTO[]>([])
 const saveLabel = ref('')
 const saveBusy = ref(false)
 const savesLoading = ref(false)
+const cards = ref<CharacterCardDTO[]>([])
+const cardsLoading = ref(false)
+const cardBusy = ref(false)
+const cardDraft = ref<CardCreateDTO>({
+  name: '',
+  faction: 'red',
+  role: '武将',
+  position: '无',
+  attack: '中',
+  magic: '低',
+  personality: '',
+})
 const errorMessage = ref('')
 let lastOccupationVersion = -1
 let source: EventSource | null = null
@@ -356,6 +373,53 @@ async function removeSave(id: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* 角色卡                                                              */
+/* ------------------------------------------------------------------ */
+
+async function refreshCards(): Promise<void> {
+  cardsLoading.value = true
+  try {
+    cards.value = (await api.listCards()).cards
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '读取角色卡列表失败'
+  } finally {
+    cardsLoading.value = false
+  }
+}
+
+async function createCard(): Promise<void> {
+  if (cardBusy.value) return
+  if (!cardDraft.value.name.trim()) {
+    errorMessage.value = '名称不能为空'
+    return
+  }
+  cardBusy.value = true
+  try {
+    cards.value = (
+      await api.createCard({ ...cardDraft.value, name: cardDraft.value.name.trim() })
+    ).cards
+    cardDraft.value.name = ''
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '角色卡创建失败'
+  } finally {
+    cardBusy.value = false
+  }
+}
+
+function cardMeta(card: CharacterCardDTO): string {
+  const parts = [
+    FACTION_NAMES[card.faction],
+    card.role,
+    `职位 ${card.position === '无' ? '无（上前线）' : card.position}`,
+    `攻击 ${card.attack}`,
+    `魔力 ${card.magic}`,
+  ]
+  if (card.personality) parts.push(card.personality)
+  return parts.join(' · ')
+}
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -385,6 +449,10 @@ watch(chatTab, async (tab) => {
 
 watch([settingsOpen, settingsTab], ([open, tab]) => {
   if (open && tab === 'save') void refreshSaves()
+  if (open && tab === 'card') {
+    void refreshCards()
+    cardDraft.value.faction = agentFaction.value
+  }
 })
 
 onMounted(async () => {
@@ -555,6 +623,13 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
+            :class="{ active: settingsTab === 'card' }"
+            @click="settingsTab = 'card'"
+          >
+            角色
+          </button>
+          <button
+            type="button"
             :class="{ active: settingsTab === 'save' }"
             @click="settingsTab = 'save'"
           >
@@ -612,6 +687,95 @@ onBeforeUnmount(() => {
             <span class="meta">当前种子 {{ seed }}</span>
           </div>
           <p class="meta">重新生成会清空当前推演进度与行军日志。</p>
+        </div>
+
+        <div v-else-if="settingsTab === 'card'" class="settings-body">
+          <label class="field">
+            <span>名称</span>
+            <input v-model="cardDraft.name" type="text" maxlength="24" placeholder="角色名称" />
+          </label>
+          <label class="field">
+            <span>势力</span>
+            <select v-model="cardDraft.faction">
+              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>定位</span>
+            <select v-model="cardDraft.role">
+              <option v-for="role in GENERAL_ROLES" :key="role" :value="role">{{ role }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>职位</span>
+            <select v-model="cardDraft.position">
+              <option v-for="position in GENERAL_POSITIONS" :key="position" :value="position">
+                {{ position === '无' ? '无（上前线）' : position }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>攻击</span>
+            <select v-model="cardDraft.attack">
+              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>魔力</span>
+            <select v-model="cardDraft.magic">
+              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>性格</span>
+            <input
+              v-model="cardDraft.personality"
+              type="text"
+              maxlength="120"
+              placeholder="如：勇猛、忠诚"
+            />
+          </label>
+          <label class="field">
+            <span>描述</span>
+            <textarea
+              v-model="cardDraft.description"
+              rows="2"
+              placeholder="背景与经历（可选）"
+            ></textarea>
+          </label>
+          <label class="field">
+            <span>对话提示词</span>
+            <textarea
+              v-model="cardDraft.dialoguePrompt"
+              rows="2"
+              placeholder="说话方式与语气（可选）"
+            ></textarea>
+          </label>
+          <label class="field">
+            <span>作者注释</span>
+            <textarea
+              v-model="cardDraft.authorNote"
+              rows="2"
+              placeholder="给使用者看的备注（可选）"
+            ></textarea>
+          </label>
+          <div class="settings-actions">
+            <button type="button" :disabled="cardBusy" @click="createCard">添加角色</button>
+            <span class="meta">{{ cardsLoading ? '读取中…' : `共 ${cards.length} 张卡` }}</span>
+          </div>
+          <ul v-if="cards.length" class="save-list">
+            <li v-for="card in cards" :key="card.id">
+              <div class="save-info">
+                <strong :style="{ color: relationColorCss(card.faction) }">
+                  {{ card.name }}{{ card.builtin ? ' · 内置' : '' }}
+                </strong>
+                <span class="meta">{{ cardMeta(card) }}</span>
+              </div>
+            </li>
+          </ul>
+          <p class="meta">
+            职位为「无」的角色保存后立即进驻地图；大臣与团长坐镇指挥，不亲自上前线。重新生成世界时全部角色卡重新进驻。
+          </p>
         </div>
 
         <div v-else-if="settingsTab === 'save'" class="settings-body">
@@ -1297,7 +1461,8 @@ onBeforeUnmount(() => {
 .field input[type='text'],
 .field input[type='password'],
 .field input[type='number'],
-.field select {
+.field select,
+.field textarea {
   flex: 1;
   min-width: 0;
   border: 1px solid rgba(214, 186, 122, 0.3);
@@ -1306,6 +1471,10 @@ onBeforeUnmount(() => {
   background: rgba(8, 13, 17, 0.85);
   color: #e9e4d6;
   font-size: 12px;
+}
+
+.field textarea {
+  resize: vertical;
 }
 
 .field.check input {

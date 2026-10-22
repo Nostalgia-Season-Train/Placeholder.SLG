@@ -9,6 +9,8 @@ import { CommanderAgent, type AgentOrderDraft } from '../../src-front/game/agent
 import { WarChat, type ChatChannel, type ChatMessage } from '../../src-front/game/agent/chat'
 import { encodeSnapshot, occupationPatch } from '../../src-front/game/api/codec'
 import type {
+  CardCreateDTO,
+  CardListDTO,
   ChatLog,
   ChatResult,
   CommandResult,
@@ -23,6 +25,7 @@ import type {
   WorldSaveDTO,
 } from '../../src-front/game/api/protocol'
 import { createLlmClient, llmStatus, updateLlm } from './llmSettings'
+import { insertCard, listCards } from './cardStore'
 import {
   deleteSave,
   listSaves,
@@ -266,6 +269,21 @@ export class GameRuntime {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Character cards                                                     */
+  /* ------------------------------------------------------------------ */
+
+  cardList(): CardListDTO {
+    return { cards: listCards() }
+  }
+
+  /** Persist a new card and, when it should march, spawn it onto the map */
+  createCard(input: CardCreateDTO): CardListDTO {
+    const card = insertCard(input)
+    if (this.sim.spawnFromCard(card)) this.sendTick()
+    return this.cardList()
+  }
+
+  /* ------------------------------------------------------------------ */
   /* AI commands                                                         */
   /* ------------------------------------------------------------------ */
 
@@ -337,6 +355,7 @@ export class GameRuntime {
     const map = generateMap(seed)
     const sim = new MarchSimulation(map, this.simSeed(map))
     sim.setEventLimit(this.config.eventLimit)
+    for (const card of listCards()) sim.spawnFromCard(card)
     const client = createLlmClient()
     const commander = new CommanderAgent(sim.terrain, client)
     const chat = new WarChat(sim.terrain, client)

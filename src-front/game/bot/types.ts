@@ -105,6 +105,30 @@ export interface SimSnapshot {
   factionCounts: Record<Faction, number>
 }
 
+/** Character-card roles; decide stat lean and front-line duty */
+export const GENERAL_ROLES = ['武将', '术武将', '法师', '疗愈师'] as const
+export type GeneralRole = (typeof GENERAL_ROLES)[number]
+
+/** Command positions; holders command instead of marching themselves */
+export const GENERAL_POSITIONS = ['无', '团长', '大臣'] as const
+export type GeneralPosition = (typeof GENERAL_POSITIONS)[number]
+
+/** Coarse stat grades used by character cards */
+export const STAT_GRADES = ['低', '中', '高'] as const
+export type StatGrade = (typeof STAT_GRADES)[number]
+
+/** Character-card fields the simulation needs to place a unit on the map */
+export interface CardSpawn {
+  id: string
+  name: string
+  faction: Faction
+  role: GeneralRole
+  position: GeneralPosition
+  attack: StatGrade
+  magic: StatGrade
+  personality: string
+}
+
 /** Serializable mid-run state, enough to resume round by round */
 export interface SimSaveState {
   round: number

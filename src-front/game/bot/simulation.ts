@@ -23,22 +23,16 @@ import {
   type BaseCity,
   type BotOrder,
   type BotStance,
+  type CardSpawn,
   type Faction,
   type Coord,
+  type GeneralState,
+  type Personality,
   type SimEvent,
   type SimSaveState,
   type SimSnapshot,
-  type GeneralState,
+  type StatGrade,
 } from './types'
-
-const NAME_POOL: Record<Faction, string[]> = {
-  red: ['朔风', '烈风'],
-  cyan: ['寒江', '听涛'],
-  gold: ['狼烟', '铁衣'],
-}
-
-/** Number of generals per faction */
-const GENERALS_PER_FACTION = 2
 
 /** Directions of the three home cities, measured from the map center */
 const BASE_ANGLES = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
@@ -48,6 +42,38 @@ const CITY_RADIUS_RATIO = 0.32
 
 /** Stances that require the bot to march to an explicit tile */
 const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
+
+/** Stat grades mapped onto a 1..3 power scale */
+const GRADE_SCORE: Record<StatGrade, number> = { 低: 1, 中: 2, 高: 3 }
+
+/** Personality tags adjust the bot's target-selection weights */
+const PERSONALITY_ADJUSTMENTS: Record<string, { aggression: number; caution: number }> = {
+  勇猛: { aggression: 0.25, caution: -0.15 },
+  激进: { aggression: 0.3, caution: -0.25 },
+  好战: { aggression: 0.3, caution: -0.2 },
+  鲁莽: { aggression: 0.25, caution: -0.3 },
+  沉稳: { aggression: -0.05, caution: 0.1 },
+  谨慎: { aggression: -0.1, caution: 0.25 },
+  多疑: { aggression: -0.05, caution: 0.2 },
+  懦弱: { aggression: -0.35, caution: 0.25 },
+  胆小: { aggression: -0.3, caution: 0.2 },
+}
+
+function clamp01(value: number): number {
+  return Math.min(0.9, Math.max(0.1, value))
+}
+
+/** Translate card personality text into bot decision weights */
+function personalityFromCard(text: string): Personality {
+  let aggression = 0.5
+  let caution = 0.55
+  for (const [tag, adjust] of Object.entries(PERSONALITY_ADJUSTMENTS)) {
+    if (!text.includes(tag)) continue
+    aggression += adjust.aggression
+    caution += adjust.caution
+  }
+  return { aggression: clamp01(aggression), caution: clamp01(caution) }
+}
 
 function cloneGeneral(general: GeneralState): GeneralState {
   return {
@@ -92,7 +118,7 @@ export class MarchSimulation {
     }
 
     this.cities = this.createCities(map)
-    this.generals = this.createGenerals(map)
+    this.generals = []
   }
 
   /** Serializable mid-run state used by the save system */
@@ -193,63 +219,53 @@ export class MarchSimulation {
     return result
   }
 
-  private createGenerals(map: MapData): GeneralState[] {
-    const centerX = (map.bounds.minX + map.bounds.maxX) / 2
-    const centerZ = (map.bounds.minZ + map.bounds.maxZ) / 2
-    const radius =
-      Math.min(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ) *
-      CITY_RADIUS_RATIO
-    const taken = new Set(this.cities.map((city) => coordKey(city.coord)))
-    const result: GeneralState[] = []
+  /**
+   * Place a character card on the map near its faction city. Position holders
+   * (大臣 / 团长) command instead of marching, so they never spawn a unit.
+   * Usable both at world boot and mid-run.
+   */
+  spawnFromCard(card: CardSpawn): GeneralState | null {
+    if (card.position !== '无') return null
+    const city = this.cities.find((item) => item.faction === card.faction)
+    if (!city) return null
 
-    FACTIONS.forEach((faction, factionIndex) => {
-      const city = this.cities.find((item) => item.faction === faction)
+    const taken = new Set<string>([
+      ...this.cities.map((item) => coordKey(item.coord)),
+      ...this.generals.map((general) => coordKey(general.coord)),
+    ])
 
-      for (let member = 0; member < GENERALS_PER_FACTION; member++) {
-        let spawn: Coord | null = city ? this.cityOutskirt(city.coord, taken) : null
-        if (!spawn) {
-          const angle =
-            (BASE_ANGLES[factionIndex] ?? 0) + (member - (GENERALS_PER_FACTION - 1) / 2) * 0.24
-          const seedCoord = worldToAxial(
-            centerX + Math.cos(angle) * radius,
-            centerZ + Math.sin(angle) * radius,
-          )
-          spawn =
-            nearestCapturable(this.terrain, seedCoord, taken) ??
-            nearestCapturable(this.terrain, seedCoord)
-        }
-        if (!spawn) continue
-        taken.add(coordKey(spawn))
+    const spawn =
+      this.cityOutskirt(city.coord, taken) ??
+      nearestCapturable(this.terrain, city.coord, taken)
+    if (!spawn) return null
 
-        const name = NAME_POOL[faction][member] ?? `${faction}${member + 1}`
-        if (city) this.log(faction, `${name}率小队自${city.name}出发`)
-
-        result.push({
-          id: `${faction}-${member}`,
-          name,
-          faction,
-          coord: { ...spawn },
-          speed: 0.6 + this.random() * 0.4,
-          power: 48 + Math.round(this.random() * 34),
-          personality: {
-            aggression: this.random(),
-            caution: 0.35 + this.random() * 0.65,
-          },
-          order: null,
-          target: null,
-          path: [],
-          actionPoints: 0,
-          captureProgress: 0,
-          captureCost: 2,
-          status: 'idle',
-          restTurns: 0,
-          marchDistance: 0,
-          captured: 0,
-        })
-      }
-    })
-
-    return result
+    const general: GeneralState = {
+      id: `card-${card.id}`,
+      name: card.name,
+      faction: card.faction,
+      coord: { ...spawn },
+      speed: 0.6 + this.random() * 0.4,
+      power: 32 + GRADE_SCORE[card.attack] * 10 + GRADE_SCORE[card.magic] * 7,
+      personality: personalityFromCard(card.personality),
+      order: null,
+      target: null,
+      path: [],
+      actionPoints: 0,
+      captureProgress: 0,
+      captureCost: 2,
+      status: 'idle',
+      restTurns: 0,
+      marchDistance: 0,
+      captured: 0,
+    }
+    this.generals.push(general)
+    this.log(
+      general.faction,
+      card.role === '武将' || card.role === '术武将'
+        ? `${card.name}率小队自${city.name}出发`
+        : `${card.name}抵达${city.name}，随队行动`,
+    )
+    return general
   }
 
   /** First free passable tile adjacent to the city, used as the squad departure tile */
