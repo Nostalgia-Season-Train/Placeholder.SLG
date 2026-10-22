@@ -58,6 +58,7 @@ const saveLabel = ref('')
 const saveBusy = ref(false)
 const savesLoading = ref(false)
 const cards = ref<CharacterCardDTO[]>([])
+const cardFormOpen = ref(false)
 const cardsLoading = ref(false)
 const cardBusy = ref(false)
 const cardDraft = ref<CardCreateDTO>({
@@ -386,6 +387,7 @@ async function createCard(): Promise<void> {
       await api.createCard({ ...cardDraft.value, name: cardDraft.value.name.trim() })
     ).cards
     cardDraft.value.name = ''
+    cardFormOpen.value = false
     errorMessage.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '角色卡创建失败'
@@ -417,10 +419,11 @@ function openSettings(tab: SettingsTab): void {
 
 watch([settingsOpen, settingsTab], ([open, tab]) => {
   if (open && tab === 'save') void refreshSaves()
-  if (open && tab === 'card') {
-    void refreshCards()
-    cardDraft.value.faction = agentFaction.value
-  }
+  if (open && tab === 'card') void refreshCards()
+})
+
+watch(cardFormOpen, (open) => {
+  if (open) cardDraft.value.faction = agentFaction.value
 })
 
 onMounted(async () => {
@@ -567,6 +570,96 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <div v-if="cardFormOpen" class="card-form-mask" @click.self="cardFormOpen = false">
+      <section class="card-form" role="dialog" aria-modal="true" aria-label="添加角色">
+        <header class="settings-head">
+          <h3>添加角色</h3>
+          <button type="button" class="close" aria-label="关闭" @click="cardFormOpen = false">
+            ×
+          </button>
+        </header>
+        <div class="card-form-body">
+          <label class="field">
+            <span>名称</span>
+            <input v-model="cardDraft.name" type="text" maxlength="24" placeholder="角色名称" />
+          </label>
+          <label class="field">
+            <span>同盟</span>
+            <select v-model="cardDraft.faction">
+              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>定位</span>
+            <select v-model="cardDraft.role">
+              <option v-for="role in GENERAL_ROLES" :key="role" :value="role">{{ role }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>职位</span>
+            <select v-model="cardDraft.position">
+              <option v-for="position in GENERAL_POSITIONS" :key="position" :value="position">
+                {{ position === '无' ? '无（上前线）' : position }}
+              </option>
+            </select>
+          </label>
+        <div class="card-grid">
+          <label class="field">
+            <span>攻击</span>
+            <select v-model="cardDraft.attack">
+              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>魔力</span>
+            <select v-model="cardDraft.magic">
+              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
+            </select>
+          </label>
+        </div>
+          <label class="field">
+            <span>性格</span>
+            <input
+              v-model="cardDraft.personality"
+              type="text"
+              maxlength="120"
+              placeholder="如：勇猛、忠诚"
+            />
+          </label>
+          <label class="field">
+            <span>描述</span>
+            <textarea
+              v-model="cardDraft.description"
+              rows="2"
+              placeholder="背景与经历（可选）"
+            ></textarea>
+          </label>
+          <label class="field">
+            <span>对话提示词</span>
+            <textarea
+              v-model="cardDraft.dialoguePrompt"
+              rows="2"
+              placeholder="说话方式与语气（可选）"
+            ></textarea>
+          </label>
+          <label class="field">
+            <span>作者注释</span>
+            <textarea
+              v-model="cardDraft.authorNote"
+              rows="2"
+              placeholder="给使用者看的备注（可选）"
+            ></textarea>
+          </label>
+          <div class="settings-actions">
+            <button type="button" :disabled="cardBusy" @click="createCard">
+              {{ cardBusy ? '保存中…' : '保存' }}
+            </button>
+            <button type="button" class="ghost" @click="cardFormOpen = false">取消</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div v-if="settingsOpen" class="settings-mask" @click.self="settingsOpen = false">
       <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header class="settings-head">
@@ -644,77 +737,8 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="settingsTab === 'card'" class="settings-body">
-          <label class="field">
-            <span>名称</span>
-            <input v-model="cardDraft.name" type="text" maxlength="24" placeholder="角色名称" />
-          </label>
-          <label class="field">
-            <span>同盟</span>
-            <select v-model="cardDraft.faction">
-              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>定位</span>
-            <select v-model="cardDraft.role">
-              <option v-for="role in GENERAL_ROLES" :key="role" :value="role">{{ role }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>职位</span>
-            <select v-model="cardDraft.position">
-              <option v-for="position in GENERAL_POSITIONS" :key="position" :value="position">
-                {{ position === '无' ? '无（上前线）' : position }}
-              </option>
-            </select>
-          </label>
-          <label class="field">
-            <span>攻击</span>
-            <select v-model="cardDraft.attack">
-              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>魔力</span>
-            <select v-model="cardDraft.magic">
-              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>性格</span>
-            <input
-              v-model="cardDraft.personality"
-              type="text"
-              maxlength="120"
-              placeholder="如：勇猛、忠诚"
-            />
-          </label>
-          <label class="field">
-            <span>描述</span>
-            <textarea
-              v-model="cardDraft.description"
-              rows="2"
-              placeholder="背景与经历（可选）"
-            ></textarea>
-          </label>
-          <label class="field">
-            <span>对话提示词</span>
-            <textarea
-              v-model="cardDraft.dialoguePrompt"
-              rows="2"
-              placeholder="说话方式与语气（可选）"
-            ></textarea>
-          </label>
-          <label class="field">
-            <span>作者注释</span>
-            <textarea
-              v-model="cardDraft.authorNote"
-              rows="2"
-              placeholder="给使用者看的备注（可选）"
-            ></textarea>
-          </label>
           <div class="settings-actions">
-            <button type="button" :disabled="cardBusy" @click="createCard">添加角色</button>
+            <button type="button" @click="cardFormOpen = true">添加角色</button>
             <span class="meta">{{ cardsLoading ? '读取中…' : `共 ${cards.length} 张卡` }}</span>
           </div>
           <ul v-if="cards.length" class="save-list">
@@ -1119,6 +1143,53 @@ onBeforeUnmount(() => {
   background: rgba(214, 186, 122, 0.55);
 }
 
+.card-form-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(4, 8, 11, 0.45);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.card-form {
+  width: min(380px, 100%);
+  max-height: min(86vh, 700px);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  border: 1px solid rgba(214, 186, 122, 0.38);
+  border-radius: 14px;
+  background: rgba(12, 19, 24, 0.95);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.card-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings-actions .ghost {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: #9fadb0;
+}
+
 .comms {
   top: 128px;
   right: 20px;
@@ -1315,6 +1386,12 @@ onBeforeUnmount(() => {
 .settings-head h2 {
   font-size: 14px;
   letter-spacing: 0.18em;
+  color: #f1e6c8;
+}
+
+.settings-head h3 {
+  font-size: 13px;
+  letter-spacing: 0.16em;
   color: #f1e6c8;
 }
 
