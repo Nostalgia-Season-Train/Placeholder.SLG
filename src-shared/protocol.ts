@@ -136,4 +136,6 @@ export type ServerEvent =
     }
   | { type: 'state'; state: GameStateDTO }
   | { type: 'chat'; channel: ChatChannel; messages: ChatMessage[] }
+  /** 发言人开始/结束输入：author 为 null 表示结束；世界频道不推送该事件 */
+  | { type: 'typing'; channel: ChatChannel; author: string | null }
   | { type: 'reset'; world: WorldDTO }

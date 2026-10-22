@@ -331,12 +331,17 @@ export class GameRuntime {
     if (channel === 'team') {
       const snapshot = this.sim.snapshot()
       this.chatPanel.postPlayer(channel, text, faction, snapshot.round)
-      const decision = this.commander.directDecision(text, faction, snapshot)
-      const applied = this.applyOrders(decision.orders, snapshot.round)
-      this.chatPanel.postSystem(channel, decision.reply, snapshot.round)
-      this.broadcastChat(channel)
-      if (applied > 0) this.sendTick()
-      return { messages: this.chatPanel.list(channel) }
+      this.hub.broadcast({ type: 'typing', channel, author: '团部' })
+      try {
+        const decision = this.commander.directDecision(text, faction, snapshot)
+        const applied = this.applyOrders(decision.orders, snapshot.round)
+        this.chatPanel.postSystem(channel, decision.reply, snapshot.round)
+        if (applied > 0) this.sendTick()
+        return { messages: this.chatPanel.list(channel) }
+      } finally {
+        this.hub.broadcast({ type: 'typing', channel, author: null })
+        this.broadcastChat(channel)
+      }
     }
 
     if (this.busy) throw new BusyError()
@@ -349,13 +354,22 @@ export class GameRuntime {
         this.chatPanel.postPlayer(channel, text, faction, snapshot.round)
         this.broadcastChat(channel)
 
-        const decision = await this.commander.decide(text, faction, this.sim.snapshot())
-        if (runId !== this.runId) return { messages: [] }
+        this.hub.broadcast({
+          type: 'typing',
+          channel,
+          author: this.chatPanel.authorName(faction),
+        })
+        try {
+          const decision = await this.commander.decide(text, faction, this.sim.snapshot())
+          if (runId !== this.runId) return { messages: [] }
 
-        const applied = this.applyOrders(decision.orders, snapshot.round)
-        this.chatPanel.postAgent(channel, faction, decision.reply, snapshot.round, decision.source)
-        this.broadcastChat(channel)
-        if (applied > 0) this.sendTick()
+          const applied = this.applyOrders(decision.orders, snapshot.round)
+          this.chatPanel.postAgent(channel, faction, decision.reply, snapshot.round, decision.source)
+          this.broadcastChat(channel)
+          if (applied > 0) this.sendTick()
+        } finally {
+          this.hub.broadcast({ type: 'typing', channel, author: null })
+        }
       } else {
         await this.chatPanel.post(channel, text, faction, snapshot)
         if (runId !== this.runId) return { messages: [] }

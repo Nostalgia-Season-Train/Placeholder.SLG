@@ -23,7 +23,7 @@ import {
   type Faction,
   type SimSnapshot,
 } from '@shared/types'
-import type { ChatMessage } from '@shared/chat'
+import type { ChatChannel, ChatMessage } from '@shared/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 
 type SettingsTab = 'march' | 'card' | 'save' | 'llm'
@@ -50,6 +50,8 @@ const chatDraft = ref('')
 const worldMessages = ref<ChatMessage[]>([])
 const teamMessages = ref<ChatMessage[]>([])
 const allianceMessages = ref<ChatMessage[]>([])
+/** 正在回复的发言人，仅同盟与本团频道使用 */
+const typing = ref<{ channel: ChatChannel; author: string } | null>(null)
 const llmStatus = ref<LlmStatusDTO | null>(null)
 const llmDraft = ref({ baseUrl: '', model: '', apiKey: '' })
 const hasSavedKey = computed(() => llmStatus.value?.hasApiKey ?? false)
@@ -109,6 +111,12 @@ const chatPlaceholder = computed(() => {
   if (chatTab.value === 'world') return '向世界频道发言（所有 AI）'
   if (chatTab.value === 'team') return '向本团 Bot 直接下达军令（不经 AI）'
   return '向本方 AI 询问或下令'
+})
+
+const typingText = computed(() => {
+  const current = typing.value
+  if (!current || current.channel !== chatTab.value) return ''
+  return `${current.author} 正在回复`
 })
 
 /* ------------------------------------------------------------------ */
@@ -193,6 +201,11 @@ function onServerEvent(event: ServerEvent): void {
       if (event.channel === 'world') worldMessages.value = event.messages
       else if (event.channel === 'team') teamMessages.value = event.messages
       else allianceMessages.value = event.messages
+      if (typing.value?.channel === event.channel) typing.value = null
+      break
+    case 'typing':
+      if (event.author) typing.value = { channel: event.channel, author: event.author }
+      else if (typing.value?.channel === event.channel) typing.value = null
       break
     case 'reset':
       applyWorld(event.world)
@@ -558,7 +571,8 @@ onBeforeUnmount(() => {
             </div>
             <p>{{ m.text }}</p>
           </li>
-          <li v-if="!chatMessages.length" class="empty">暂无消息</li>
+          <li v-if="typingText" class="typing">{{ typingText }}<span class="dots">…</span></li>
+          <li v-if="!chatMessages.length && !typingText" class="empty">暂无消息</li>
         </ul>
 
         <div class="chat-input">
@@ -1276,6 +1290,26 @@ onBeforeUnmount(() => {
 
 .chat-list li.mine {
   background: rgba(214, 186, 122, 0.1);
+}
+
+.chat-list li.typing {
+  color: #9fb3b8;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.chat-list li.typing .dots {
+  animation: typing-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes typing-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .chat-head {

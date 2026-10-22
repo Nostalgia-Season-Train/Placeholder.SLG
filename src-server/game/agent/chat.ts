@@ -179,6 +179,11 @@ export class WarChat {
     })
   }
 
+  /** 该同盟的发言人名，供前端显示「XXX 正在打字」 */
+  authorName(faction: Faction): string {
+    return this.authorOf(faction)
+  }
+
   /** 作者名格式：【同盟名】职务·角色（职位为「无」时省略职务段） */
   private authorOf(faction: Faction): string {
     const person = this.speakers[faction]
