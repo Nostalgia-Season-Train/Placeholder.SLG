@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "run-p dev:server dev:client",
-    "dev:client": "vite",
+    "dev:client": "vite --config src-front/vite.config.ts",
     "dev:server": "tsx watch src-server/index.ts",
     "server": "tsx src-server/index.ts",
     "build": "run-p type-check \"build-only {@}\" --",
-    "preview": "vite preview",
-    "build-only": "vite build",
+    "preview": "vite preview --config src-front/vite.config.ts",
+    "build-only": "vite build --config src-front/vite.config.ts",
     "type-check": "run-p type-check:client type-check:server",
     "type-check:client": "vue-tsc --build",
     "type-check:server": "tsc -p tsconfig.server.json"

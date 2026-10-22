@@ -2,7 +2,10 @@
  * Authoritative game service: one world, JSON commands, SSE snapshots.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { SseHub } from './http/sse'
+import { serveStatic } from './http/static'
 import { BusyError, GameRuntime } from './runtime/GameRuntime'
 import { FACTIONS, type Faction } from '../src-front/game/bot/types'
 import type { ChatChannel } from '../src-front/game/agent/chat'
@@ -10,6 +13,8 @@ import type { ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
 
 const PORT = Number(process.env.SERVER_PORT ?? 8787)
 const HOST = process.env.SERVER_HOST ?? '127.0.0.1'
+/** Built frontend files, served in production so one process hosts UI and API */
+const CLIENT_DIR = resolve(process.env.SLG_CLIENT_DIR ?? 'dist')
 
 class HttpError extends Error {
   constructor(
@@ -175,7 +180,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     return
   }
 
-  throw new HttpError(404, '接口不存在')
+  if ((method === 'GET' || method === 'HEAD') && !path.startsWith('/api')) {
+    if (await serveStatic(CLIENT_DIR, path, method, response)) return
+  }
+
+  throw new HttpError(404, path.startsWith('/api') ? '接口不存在' : '资源不存在')
 }
 
 const server = createServer((request, response) => {
@@ -191,6 +200,11 @@ const heartbeat = setInterval(() => hub.heartbeat(), 15_000)
 
 server.listen(PORT, HOST, () => {
   console.log(`[slg] 后端推演服务已启动：http://${HOST}:${PORT}`)
+  console.log(
+    existsSync(resolve(CLIENT_DIR, 'index.html'))
+      ? `[slg] 前端静态挂载：${CLIENT_DIR}`
+      : '[slg] 前端产物不存在，运行 npm run build 后即可由本服务托管',
+  )
 })
 
 function shutdown(): void {
