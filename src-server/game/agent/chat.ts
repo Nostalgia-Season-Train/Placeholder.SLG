@@ -11,26 +11,14 @@ import {
   type Faction,
   type GeneralPosition,
   type SimSnapshot,
-} from '../bot/types'
+} from '../../../src-shared/types'
+import type { ChatChannel, ChatMessage, ChatSource } from '../../../src-shared/chat'
 import type { LlmClient, LlmMessage } from './llm'
-
-export type ChatChannel = 'world' | 'alliance' | 'team'
-export type ChatSource = 'llm' | 'mock' | 'player' | 'system'
 
 /** 同盟发言人：职位最高的角色卡（大臣优先），AI 以其名义发言 */
 export interface FactionSpokesperson {
   position: GeneralPosition
   name: string
-}
-
-export interface ChatMessage {
-  id: number
-  channel: ChatChannel
-  faction: Faction | null
-  author: string
-  text: string
-  round: number
-  source: ChatSource
 }
 
 const MAX_MESSAGES = 160

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { PlanePoint } from './hex'
-import { terrainHeightAt, type MapData } from './MapGenerator'
+import type { PlanePoint } from '@shared/map/hex'
+import { terrainHeightAt, type MapData } from '@shared/map/MapGenerator'
 import { createRibbon } from './ribbon'
 
 /** 沿路径取局部最高地形并做平滑，路面既不会悬空也不会被地形顶穿 */

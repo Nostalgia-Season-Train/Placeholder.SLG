@@ -15,7 +15,9 @@ npm run build      # 构建前端到 dist/
 npm run server     # 生产：同一端口托管 dist/ 与 /api
 ```
 
-开发时修改 `src-server/` 或服务端复用的 `src-front/game/` 内核文件会自动重启；若启动提示端口 8787 被占用，先停止旧的 `npm run dev` / `npm run server` 进程。
+开发时修改 `src-server/` 或共享层 `src-shared/` 会自动重启；若启动提示端口 8787 被占用，先停止旧的 `npm run dev` / `npm run server` 进程。
+
+目录划分：`src-front/` 只放渲染与传输（Three.js 图层、Vue 组件、REST 客户端），`src-shared/` 放前后端共享的数据模型、协议、编解码与纯地图工具，`src-server/` 放唯一权威世界与全部规则计算（推演、AI 决策、频道、存档）。前端通过 `@shared/*` 别名引用共享层。
 
 生产模式下无需单独部署静态服务器：`src-server` 会挂载 `dist/`，未命中的客户端路由回退到 `index.html`，产物目录可用 `SLG_CLIENT_DIR` 覆盖。
 

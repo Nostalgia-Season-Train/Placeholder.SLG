@@ -6,7 +6,7 @@
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { CardCreateDTO, CharacterCardDTO } from '../../src-front/game/api/protocol'
+import type { CardCreateDTO, CharacterCardDTO } from '../../src-shared/protocol'
 
 const DB_PATH = resolve('src-server/data/cards.db')
 

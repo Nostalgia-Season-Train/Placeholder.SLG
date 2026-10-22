@@ -3,7 +3,7 @@
  * A tile or token is painted by its owner's relation to the player's faction:
  * self = green, ally = blue, every other relation = red with an optional frame.
  */
-import type { Faction } from './types'
+import type { Faction } from '@shared/types'
 
 export type FactionRelation =
   | 'self'

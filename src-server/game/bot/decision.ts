@@ -4,7 +4,7 @@
  */
 import { coordKey, hexDistance, type TileInfo, type WorldTerrain } from './terrain'
 import { findPath } from './pathfinding'
-import type { Coord, Faction, GeneralState } from './types'
+import type { Coord, Faction, GeneralState } from '../../../src-shared/types'
 
 /** Longest path a general accepts in one decision */
 const MAX_PATH_COST = 46

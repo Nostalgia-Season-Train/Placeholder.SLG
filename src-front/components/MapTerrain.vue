@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
-import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
-import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@/game/api/codec'
+import { getTerrainLevel, TERRAIN_LEVELS } from '@shared/map/terrainLevels'
+import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@shared/codec'
 import { WorldApi } from '@/game/api/client'
 import type {
   CardCreateDTO,
@@ -13,7 +13,7 @@ import type {
   SaveSummaryDTO,
   ServerEvent,
   WorldDTO,
-} from '@/game/api/protocol'
+} from '@shared/protocol'
 import {
   FACTIONS,
   FACTION_NAMES,
@@ -22,8 +22,8 @@ import {
   STAT_GRADES,
   type Faction,
   type SimSnapshot,
-} from '@/game/bot/types'
-import type { ChatMessage } from '@/game/agent/chat'
+} from '@shared/types'
+import type { ChatMessage } from '@shared/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
 
 type SettingsTab = 'march' | 'card' | 'save' | 'llm'

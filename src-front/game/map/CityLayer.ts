@@ -4,7 +4,7 @@
  * It only consumes city data from the simulation snapshot.
  */
 import * as THREE from 'three'
-import { FACTION_COLORS, type BaseCity } from '../bot/types'
+import { FACTION_COLORS, type BaseCity } from '@shared/types'
 import { relationStyleOf, type Diplomacy } from '../bot/diplomacy'
 import type { WorldPosition } from './AgentLayer'
 

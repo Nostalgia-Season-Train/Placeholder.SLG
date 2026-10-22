@@ -2,8 +2,8 @@
  * Browser client for the authoritative game server.
  * Only transports state and commands — no game rules live here.
  */
-import type { ChatChannel } from '../agent/chat'
-import type { Faction } from '../bot/types'
+import type { ChatChannel } from '@shared/chat'
+import type { Faction } from '@shared/types'
 import type {
   CardCreateDTO,
   CardListDTO,
@@ -18,7 +18,7 @@ import type {
   ServerEvent,
   SnapshotDTO,
   WorldDTO,
-} from './protocol'
+} from '@shared/protocol'
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {

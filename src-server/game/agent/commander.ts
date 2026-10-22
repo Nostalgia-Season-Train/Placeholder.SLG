@@ -3,7 +3,7 @@
  * When an LLM client is configured the directive is interpreted by the model; otherwise a
  * deterministic local parser produces the same order structure, so the demo works offline.
  */
-import { axialToWorld } from '../map/hex'
+import { axialToWorld } from '../../../src-shared/map/hex'
 import { coordKey, getTile, hexDistance, type TileInfo, type WorldTerrain } from '../bot/terrain'
 import {
   FACTION_NAMES,
@@ -11,7 +11,7 @@ import {
   type Coord,
   type Faction,
   type SimSnapshot,
-} from '../bot/types'
+} from '../../../src-shared/types'
 import type { LlmClient, LlmMessage } from './llm'
 
 export interface AgentOrderDraft {

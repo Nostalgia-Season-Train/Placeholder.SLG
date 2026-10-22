@@ -18,9 +18,9 @@ import {
   type GeneralPosition,
   type GeneralRole,
   type StatGrade,
-} from '../src-front/game/bot/types'
-import type { ChatChannel } from '../src-front/game/agent/chat'
-import type { CardCreateDTO, ControlPatch, LlmPatch } from '../src-front/game/api/protocol'
+} from '../src-shared/types'
+import type { ChatChannel } from '../src-shared/chat'
+import type { CardCreateDTO, ControlPatch, LlmPatch } from '../src-shared/protocol'
 
 const PORT = Number(process.env.SERVER_PORT ?? 8787)
 const HOST = process.env.SERVER_HOST ?? '127.0.0.1'

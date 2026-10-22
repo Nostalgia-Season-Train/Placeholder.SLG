@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { PlanePoint } from './hex'
+import type { PlanePoint } from '@shared/map/hex'
 import { createRibbon } from './ribbon'
 
 const WATER_Y = 0.11

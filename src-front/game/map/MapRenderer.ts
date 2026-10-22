@@ -1,14 +1,14 @@
 import * as THREE from 'three'
-import { FACTION_NAMES, type BaseCity, type Faction, type GeneralState } from '../bot/types'
+import { FACTION_NAMES, type BaseCity, type Faction, type GeneralState } from '@shared/types'
 import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
-import { hexCornerPoints, tileKey } from './hex'
-import type { MapData } from './MapGenerator'
+import { hexCornerPoints, tileKey } from '@shared/map/hex'
+import type { MapData } from '@shared/map/MapGenerator'
 import { RiverLayer } from './RiverLayer'
 import { RoadLayer } from './RoadLayer'
 import { TerrainLayer } from './TerrainLayer'
-import { getTerrainLevel } from './terrainLevels'
+import { getTerrainLevel } from '@shared/map/terrainLevels'
 
 export interface HoverCity {
   name: string

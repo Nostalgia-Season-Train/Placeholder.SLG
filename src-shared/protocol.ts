@@ -2,9 +2,9 @@
  * Wire protocol shared by the Node game server and the browser client.
  * Types only — importing this module never pulls runtime code.
  */
-import type { ChatChannel, ChatMessage } from '../agent/chat'
-import type { CardSpawn, Faction, SimSaveState, SimSnapshot } from '../bot/types'
-import type { MapData } from '../map/MapGenerator'
+import type { ChatChannel, ChatMessage } from './chat'
+import type { CardSpawn, Faction, SimSaveState, SimSnapshot } from './types'
+import type { MapData } from './map/MapGenerator'
 
 /** MapData without the runtime lookup table; the client rebuilds it from tiles */
 export type MapDTO = Omit<MapData, 'tileMap'>

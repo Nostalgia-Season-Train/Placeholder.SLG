@@ -2,9 +2,9 @@
  * Codec between runtime game objects and the JSON wire format.
  * Pure functions so both the server and the browser can use them.
  */
-import type { Faction, SimSnapshot } from '../bot/types'
+import type { Faction, SimSnapshot } from './types'
 import type { MapDTO, SnapshotDTO } from './protocol'
-import type { MapData } from '../map/MapGenerator'
+import type { MapData } from './map/MapGenerator'
 
 export function decodeMap(dto: MapDTO): MapData {
   const tileMap = new Map<string, MapData['tiles'][number]>()

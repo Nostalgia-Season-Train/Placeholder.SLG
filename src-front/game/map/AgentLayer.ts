@@ -4,13 +4,13 @@
  * It only consumes simulation snapshots and contains no simulation logic.
  */
 import * as THREE from 'three'
-import { FACTION_COLORS, formatUnitName, type Faction, type GeneralState } from '../bot/types'
+import { FACTION_COLORS, formatUnitName, type Faction, type GeneralState } from '@shared/types'
 import {
   relationStyleOf,
   type Diplomacy,
   type RelationStyle,
 } from '../bot/diplomacy'
-import { HEX_WIDTH, hexCornerPoints } from './hex'
+import { HEX_WIDTH, hexCornerPoints } from '@shared/map/hex'
 
 /** World units walked per second; one hex takes roughly 0.55s */
 const WALK_SPEED = HEX_WIDTH / 0.55

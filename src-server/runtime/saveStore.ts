@@ -5,7 +5,7 @@
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { SaveSummaryDTO, WorldSaveDTO } from '../../src-front/game/api/protocol'
+import type { SaveSummaryDTO, WorldSaveDTO } from '../../src-shared/protocol'
 
 const DB_PATH = resolve('src-server/data/save.db')
 const AUTO_SAVE_ID = 'autosave'

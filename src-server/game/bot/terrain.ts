@@ -3,10 +3,10 @@
  * and the capturable tile list used by the march simulation.
  * Built once at initialization, then treated as read-only.
  */
-import { tileKey } from '../map/hex'
-import type { MapData } from '../map/MapGenerator'
-import { getTerrainLevel } from '../map/terrainLevels'
-import type { Coord } from './types'
+import { tileKey } from '../../../src-shared/map/hex'
+import type { MapData } from '../../../src-shared/map/MapGenerator'
+import { getTerrainLevel } from '../../../src-shared/map/terrainLevels'
+import type { Coord } from '../../../src-shared/types'
 
 export interface TileInfo {
   coord: Coord

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-import { HEX_RADIUS } from './hex'
-import { tileRng, type MapData, type MapTile } from './MapGenerator'
-import { BANK_COLOR, BANK_HEIGHT, getTerrainLevel } from './terrainLevels'
+import { HEX_RADIUS } from '@shared/map/hex'
+import { tileRng, type MapData, type MapTile } from '@shared/map/MapGenerator'
+import { BANK_COLOR, BANK_HEIGHT, getTerrainLevel } from '@shared/map/terrainLevels'
 
 interface DecorInstance {
   x: number

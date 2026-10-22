@@ -3,8 +3,8 @@
  * march along their path and spend a few rounds capturing the tile.
  * Hostile generals sharing a tile settle it by combat power.
  */
-import { worldToAxial } from '../map/hex'
-import { createSeedRandom, type MapData, type SeedRandom } from '../map/MapGenerator'
+import { worldToAxial } from '../../../src-shared/map/hex'
+import { createSeedRandom, type MapData, type SeedRandom } from '../../../src-shared/map/MapGenerator'
 import { chooseTarget } from './decision'
 import { findPath } from './pathfinding'
 import {
@@ -32,7 +32,7 @@ import {
   type SimSaveState,
   type SimSnapshot,
   type StatGrade,
-} from './types'
+} from '../../../src-shared/types'
 
 /** Directions of the three home cities, measured from the map center */
 const BASE_ANGLES = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]

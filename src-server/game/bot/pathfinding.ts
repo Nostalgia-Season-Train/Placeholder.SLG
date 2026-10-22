@@ -3,7 +3,7 @@
  * Costs come from terrain movement cost; water and high mountains are impassable.
  */
 import { coordKey, getTile, hexDistance, neighbors, type WorldTerrain } from './terrain'
-import type { Coord } from './types'
+import type { Coord } from '../../../src-shared/types'
 
 interface Node {
   coord: Coord

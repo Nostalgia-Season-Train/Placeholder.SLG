@@ -1,6 +1,6 @@
 {
   "extends": "@tsconfig/node24/tsconfig.json",
-  "include": ["src-server/**/*.ts"],
+  "include": ["src-server/**/*.ts", "src-shared/**/*.ts"],
   "compilerOptions": {
     "noEmit": true,
     "module": "ESNext",
