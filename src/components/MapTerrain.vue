@@ -2,7 +2,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@/game/map/terrainLevels'
-import { MarchSimulation } from '@/game/bot/simulation'
+import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@/game/api/codec'
+import { WorldApi } from '@/game/api/client'
+import type {
+  ControlPatch,
+  GameStateDTO,
+  LlmStatusDTO,
+  ServerEvent,
+  WorldDTO,
+} from '@/game/api/protocol'
 import {
   FACTIONS,
   FACTION_NAMES,
@@ -10,22 +18,14 @@ import {
   type Faction,
   type SimSnapshot,
 } from '@/game/bot/types'
-import { CommanderAgent } from '@/game/agent/commander'
-import { WarChat, type ChatMessage } from '@/game/agent/chat'
+import type { ChatMessage } from '@/game/agent/chat'
 import { createDiplomacy, RELATION_LABELS, relationStyleOf } from '@/game/bot/diplomacy'
-import {
-  OpenAiCompatClient,
-  isLlmConfigured,
-  loadLlmConfig,
-  saveLlmConfig,
-  type LlmConfig,
-} from '@/game/agent/llm'
 
 type SettingsTab = 'march' | 'log' | 'llm'
 
+const api = new WorldApi()
 const host = ref<HTMLDivElement | null>(null)
 const renderer = shallowRef<MapRenderer | null>(null)
-const simulation = shallowRef<MarchSimulation | null>(null)
 const snapshot = shallowRef<SimSnapshot | null>(null)
 const hover = ref<HoverInfo | null>(null)
 const seed = ref(20261021)
@@ -37,27 +37,23 @@ const settingsOpen = ref(false)
 const settingsTab = ref<SettingsTab>('march')
 const helpOpen = ref(false)
 const autoInterval = ref(10)
+const autoCommand = ref(true)
 const logLimit = ref(14)
 const autoScrollLog = ref(true)
 const logList = ref<HTMLUListElement | null>(null)
-const agent = shallowRef<CommanderAgent | null>(null)
 const agentFaction = ref<Faction>('red')
-const agentBusy = ref(false)
-const autoCommand = ref(true)
-const llmConfig = ref<LlmConfig>(loadLlmConfig())
-const llmReady = computed(() => isLlmConfigured(llmConfig.value))
-const chat = shallowRef<WarChat | null>(null)
-const chatTick = ref(0)
+const chatBusy = ref(false)
 const chatTab = ref<'world' | 'alliance' | 'log'>('world')
 const chatDraft = ref('')
-const chatBusy = ref(false)
-const WORLD_CHAT_INTERVAL = 20
-let lastWorldChatRound = 0
-let worldChatIndex = 0
-const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
-let lastAutoRound = 0
+const worldMessages = ref<ChatMessage[]>([])
+const allianceMessages = ref<ChatMessage[]>([])
+const llmStatus = ref<LlmStatusDTO | null>(null)
+const llmDraft = ref({ baseUrl: '', model: '', apiKey: '' })
+const llmReady = computed(() => llmStatus.value?.configured ?? false)
+const hasSavedKey = computed(() => llmStatus.value?.hasApiKey ?? false)
+const errorMessage = ref('')
 let lastOccupationVersion = -1
-let timer: ReturnType<typeof setInterval> | null = null
+let source: EventSource | null = null
 
 function toCss(color: number): string {
   return `#${color.toString(16).padStart(6, '0')}`
@@ -107,11 +103,9 @@ function captureWidth(progress: number, cost: number): string {
 const aiModeLabel = computed(() => (llmReady.value ? 'LLM' : '模拟 AI'))
 
 const chatMessages = computed<ChatMessage[]>(() => {
-  chatTick.value
-  const panel = chat.value
-  const channel = chatTab.value
-  if (!panel || channel === 'log') return []
-  return panel.list(channel)
+  if (chatTab.value === 'world') return worldMessages.value
+  if (chatTab.value === 'alliance') return allianceMessages.value
+  return []
 })
 
 const chatPlaceholder = computed(() =>
@@ -119,201 +113,195 @@ const chatPlaceholder = computed(() =>
 )
 
 /* ------------------------------------------------------------------ */
-/* AI                                                                  */
+/* 服务端状态                                                          */
 /* ------------------------------------------------------------------ */
 
-function createLlmClient() {
-  return isLlmConfigured(llmConfig.value) ? new OpenAiCompatClient(llmConfig.value) : null
+function setLlmStatus(status: LlmStatusDTO): void {
+  llmStatus.value = status
+  llmDraft.value.baseUrl = status.baseUrl
+  llmDraft.value.model = status.model
+  llmDraft.value.apiKey = ''
 }
 
-function saveLlmSettings(): void {
-  saveLlmConfig(llmConfig.value)
-  agent.value?.setLlm(createLlmClient())
-  chat.value?.setLlm(createLlmClient())
+function applyWorld(world: WorldDTO): void {
+  const state = world.state
+  snapshot.value = decodeSnapshot(world.snapshot)
+  worldMessages.value = world.chat.world
+  allianceMessages.value = world.chat.alliance
+  seed.value = state.seed
+  seedDraft.value = String(state.seed)
+  running.value = state.running
+  speed.value = state.speed
+  autoCommand.value = state.autoCommand
+  autoInterval.value = state.autoInterval
+  logLimit.value = state.eventLimit
+  agentFaction.value = state.faction
+  setLlmStatus(world.llm)
+  lastOccupationVersion = -1
 }
 
-async function issueDirective(text: string): Promise<void> {
-  const engine = simulation.value
-  const commander = agent.value
-  const content = text.trim()
-  if (!engine || !commander || agentBusy.value || !content) return
+function applyState(state: GameStateDTO): void {
+  running.value = state.running
+  speed.value = state.speed
+  autoCommand.value = state.autoCommand
+  autoInterval.value = state.autoInterval
+  logLimit.value = state.eventLimit
+  if (state.faction !== agentFaction.value) {
+    agentFaction.value = state.faction
+    lastOccupationVersion = -1
+    renderer.value?.setDiplomacy(diplomacy.value)
+  }
+  if (llmStatus.value) {
+    llmStatus.value = { ...llmStatus.value, configured: state.llmConfigured }
+  }
+  renderScene()
+}
 
-  agentBusy.value = true
-  try {
-    const round = engine.snapshot().round
-    const decision = await commander.decide(content, agentFaction.value, engine.snapshot())
-    for (const order of decision.orders) {
-      engine.setOrder(order.generalId, {
-        stance: order.stance,
-        target: order.target,
-        note: order.reason,
-        issuedRound: round,
-      })
-    }
-    syncSnapshot()
-  } finally {
-    agentBusy.value = false
+function renderScene(): void {
+  const view = renderer.value
+  const snap = snapshot.value
+  if (!view || !snap) return
+
+  const policy = diplomacy.value
+  view.setAgents(snap.generals, policy)
+  view.setCities(snap.cities, policy)
+
+  if (snap.occupationVersion !== lastOccupationVersion) {
+    lastOccupationVersion = snap.occupationVersion
+    view.setOccupations(snap.occupation, policy)
   }
 }
 
-function maybeAutoCommand(): void {
-  const round = snapshot.value?.round ?? 0
-  if (!autoCommand.value || agentBusy.value || round - lastAutoRound < autoInterval.value) return
-  lastAutoRound = round
-  void issueDirective(AUTO_DIRECTIVE)
+function onServerEvent(event: ServerEvent): void {
+  errorMessage.value = ''
+  switch (event.type) {
+    case 'hello':
+      applyWorld(event.world)
+      renderScene()
+      break
+    case 'tick': {
+      const occupation = applyOccupationPatch(
+        snapshot.value?.occupation ?? new Map(),
+        event.occPatch,
+      )
+      snapshot.value = { ...event.snapshot, occupation }
+      renderScene()
+      break
+    }
+    case 'state':
+      applyState(event.state)
+      break
+    case 'chat':
+      if (event.channel === 'world') worldMessages.value = event.messages
+      else allianceMessages.value = event.messages
+      break
+    case 'reset':
+      applyWorld(event.world)
+      renderer.value?.setMap(decodeMap(event.world.map))
+      renderScene()
+      break
+  }
+}
+
+async function control(patch: ControlPatch): Promise<void> {
+  try {
+    applyState(await api.control(patch))
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '控制请求失败'
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/* Chat                                                                */
+/* Chat 与 LLM                                                         */
 /* ------------------------------------------------------------------ */
 
 async function sendChat(): Promise<void> {
-  const panel = chat.value
-  const engine = simulation.value
-  const commander = agent.value
   const channel = chatTab.value
   const text = chatDraft.value.trim()
-  if (!panel || !engine || !text || chatBusy.value || channel === 'log') return
+  if (!text || chatBusy.value || channel === 'log') return
 
   chatDraft.value = ''
   chatBusy.value = true
   try {
-    const current = engine.snapshot()
-    if (channel === 'alliance' && commander && !agentBusy.value) {
-      panel.postPlayer('alliance', text, agentFaction.value, current.round)
-      agentBusy.value = true
-      try {
-        const decision = await commander.decide(text, agentFaction.value, current)
-        for (const order of decision.orders) {
-          engine.setOrder(order.generalId, {
-            stance: order.stance,
-            target: order.target,
-            note: order.reason,
-            issuedRound: current.round,
-          })
-        }
-        panel.postAgent('alliance', agentFaction.value, decision.reply, current.round, decision.source)
-      } finally {
-        agentBusy.value = false
-      }
-      syncSnapshot()
-      return
-    }
-
-    await panel.post(channel, text, agentFaction.value, current)
+    const result = await api.chat(channel, text, agentFaction.value)
+    if (channel === 'world') worldMessages.value = result.messages
+    else allianceMessages.value = result.messages
+    errorMessage.value = ''
+  } catch (error) {
+    chatDraft.value = text
+    errorMessage.value = error instanceof Error ? error.message : '消息发送失败'
   } finally {
     chatBusy.value = false
-    chatTick.value += 1
   }
 }
 
-async function broadcastWorld(): Promise<void> {
-  const panel = chat.value
-  const engine = simulation.value
-  if (!panel || !engine || chatBusy.value) return
-
-  const faction = FACTIONS[worldChatIndex % FACTIONS.length]!
-  worldChatIndex += 1
-  chatBusy.value = true
+async function saveLlmSettings(): Promise<void> {
   try {
-    await panel.broadcast(faction, engine.snapshot())
-  } finally {
-    chatBusy.value = false
-    chatTick.value += 1
+    setLlmStatus(
+      await api.setLlm({
+        baseUrl: llmDraft.value.baseUrl,
+        model: llmDraft.value.model,
+        apiKey: llmDraft.value.apiKey,
+      }),
+    )
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'LLM 设置保存失败'
   }
-}
-
-function maybeWorldChat(): void {
-  const round = snapshot.value?.round ?? 0
-  if (!chat.value || chatBusy.value || round - lastWorldChatRound < WORLD_CHAT_INTERVAL) return
-  lastWorldChatRound = round
-  void broadcastWorld()
 }
 
 /* ------------------------------------------------------------------ */
-/* Simulation loop                                                     */
+/* 推演控制                                                            */
 /* ------------------------------------------------------------------ */
-
-function initSimulation(): void {
-  const map = renderer.value?.getMap()
-  if (!map) return
-  const engine = new MarchSimulation(map, ((map.seed ^ 0x9e3779b9) >>> 0) || 1)
-  engine.setEventLimit(logLimit.value)
-  simulation.value = engine
-  agent.value = new CommanderAgent(engine.terrain, createLlmClient())
-  const panel = new WarChat(engine.terrain, createLlmClient())
-  panel.welcome(agentFaction.value, 0)
-  chat.value = panel
-  chatTick.value += 1
-  lastAutoRound = 0
-  lastWorldChatRound = 0
-  worldChatIndex = 0
-  lastOccupationVersion = -1
-  syncSnapshot()
-}
-
-function syncSnapshot(): void {
-  const engine = simulation.value
-  const view = renderer.value
-  if (!engine || !view) return
-
-  const result = engine.snapshot()
-  snapshot.value = result
-  const policy = diplomacy.value
-  view.setAgents(result.generals, policy)
-  view.setCities(result.cities, policy)
-
-  if (result.occupationVersion !== lastOccupationVersion) {
-    lastOccupationVersion = result.occupationVersion
-    view.setOccupations(result.occupation, policy)
-  }
-}
-
-watch(agentFaction, () => {
-  renderer.value?.setDiplomacy(diplomacy.value)
-  syncSnapshot()
-})
-
-function stepOnce(): void {
-  if (!simulation.value) return
-  simulation.value.step()
-  syncSnapshot()
-  maybeWorldChat()
-  maybeAutoCommand()
-}
-
-function stopTimer(): void {
-  if (timer !== null) {
-    clearInterval(timer)
-    timer = null
-  }
-}
-
-function startTimer(): void {
-  stopTimer()
-  if (!running.value) return
-  timer = setInterval(() => stepOnce(), speed.value)
-}
 
 function toggleRunning(): void {
-  running.value = !running.value
-  startTimer()
+  void control({ running: !running.value })
+}
+
+async function stepOnce(): Promise<void> {
+  try {
+    const next = await api.step()
+    // 正常情况下由 SSE 增量推送；断线时用返回的全量快照兜底
+    if (!source || source.readyState !== EventSource.OPEN) {
+      snapshot.value = decodeSnapshot(next)
+      renderScene()
+    }
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '单步推演失败'
+  }
 }
 
 function onSpeedChange(): void {
-  startTimer()
+  void control({ speed: speed.value })
 }
 
-function regenerate(): void {
-  running.value = true
-  stopTimer()
+function onAutoCommandChange(): void {
+  void control({ autoCommand: autoCommand.value })
+}
+
+function onAutoIntervalChange(): void {
+  void control({ autoInterval: autoInterval.value })
+}
+
+function onFactionChange(): void {
+  void control({ faction: agentFaction.value })
+}
+
+async function resetWorld(): Promise<void> {
   const typed = Number.parseInt(seedDraft.value, 10)
   const nextSeed =
     Number.isFinite(typed) && typed > 0 ? typed : Math.floor(Math.random() * 1_000_000_000)
-  seedDraft.value = String(nextSeed)
-  renderer.value?.regenerate(nextSeed)
-  initSimulation()
-  startTimer()
+  try {
+    const world = await api.reset(nextSeed)
+    applyWorld(world)
+    renderer.value?.setMap(decodeMap(world.map))
+    renderScene()
+    errorMessage.value = ''
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '重新生成失败'
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -326,8 +314,7 @@ function openSettings(tab: SettingsTab): void {
 }
 
 function onLogLimitChange(): void {
-  simulation.value?.setEventLimit(logLimit.value)
-  syncSnapshot()
+  void control({ eventLimit: logLimit.value })
 }
 
 watch(
@@ -345,30 +332,36 @@ watch(chatTab, async (tab) => {
   if (logList.value) logList.value.scrollTop = 0
 })
 
-onMounted(() => {
+onMounted(async () => {
   if (!host.value) return
-  renderer.value = new MapRenderer(host.value, {
-    seed: seed.value,
-    onHover: (info) => {
-      hover.value = info
-    },
-    onReady: (stats) => {
-      seed.value = stats.seed
-      tileCount.value = stats.tiles
-    },
-  })
-  renderer.value.start()
-  initSimulation()
-  startTimer()
+  try {
+    const world = await api.getWorld()
+    applyWorld(world)
+    renderer.value = new MapRenderer(host.value, {
+      map: decodeMap(world.map),
+      onHover: (info) => {
+        hover.value = info
+      },
+      onReady: (stats) => {
+        seed.value = stats.seed
+        tileCount.value = stats.tiles
+      },
+    })
+    renderer.value.start()
+    renderScene()
+    source = api.subscribe(onServerEvent, () => {
+      errorMessage.value = '与后端断开，正在重连…'
+    })
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '无法连接后端服务'
+  }
 })
 
 onBeforeUnmount(() => {
-  stopTimer()
+  source?.close()
+  source = null
   renderer.value?.dispose()
   renderer.value = null
-  simulation.value = null
-  agent.value = null
-  chat.value = null
 })
 </script>
 
@@ -556,7 +549,7 @@ onBeforeUnmount(() => {
         <div v-if="settingsTab === 'march'" class="settings-body">
           <label class="field">
             <span>当前势力</span>
-            <select v-model="agentFaction">
+            <select v-model="agentFaction" @change="onFactionChange">
               <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
             </select>
           </label>
@@ -570,11 +563,11 @@ onBeforeUnmount(() => {
           </label>
           <label class="field check">
             <span>启用自动决策</span>
-            <input v-model="autoCommand" type="checkbox" />
+            <input v-model="autoCommand" type="checkbox" @change="onAutoCommandChange" />
           </label>
           <label class="field">
             <span>决策间隔</span>
-            <select v-model.number="autoInterval">
+            <select v-model.number="autoInterval" @change="onAutoIntervalChange">
               <option :value="5">每 5 回合</option>
               <option :value="10">每 10 回合</option>
               <option :value="20">每 20 回合</option>
@@ -585,7 +578,7 @@ onBeforeUnmount(() => {
             <input v-model="seedDraft" type="number" min="1" />
           </label>
           <div class="settings-actions">
-            <button type="button" @click="regenerate">按种子重新生成</button>
+            <button type="button" @click="resetWorld">按种子重新生成</button>
             <span class="meta">当前种子 {{ seed }}</span>
           </div>
           <p class="meta">重新生成会清空当前推演进度与行军日志。</p>
@@ -612,24 +605,28 @@ onBeforeUnmount(() => {
           <label class="field">
             <span>baseUrl</span>
             <input
-              v-model="llmConfig.baseUrl"
+              v-model="llmDraft.baseUrl"
               type="text"
               placeholder="https://api.openai.com/v1"
             />
           </label>
           <label class="field">
             <span>model</span>
-            <input v-model="llmConfig.model" type="text" placeholder="gpt-4o-mini" />
+            <input v-model="llmDraft.model" type="text" placeholder="gpt-4o-mini" />
           </label>
           <label class="field">
             <span>apiKey</span>
-            <input v-model="llmConfig.apiKey" type="password" placeholder="仅保存在本地浏览器" />
+            <input
+              v-model="llmDraft.apiKey"
+              type="password"
+              :placeholder="hasSavedKey ? '已保存，留空保持不变' : '仅保存在后端服务'"
+            />
           </label>
           <div class="settings-actions">
             <button type="button" @click="saveLlmSettings">保存</button>
             <span class="meta">{{ llmReady ? '已接入 LLM' : '未接入，AI 使用模拟决策' }}</span>
           </div>
-          <p class="meta">接口需兼容 OpenAI chat/completions。未接入 LLM 时由模拟 AI 接管决策与频道对话，接入后使用正式模型。</p>
+          <p class="meta">接口需兼容 OpenAI chat/completions。配置保存在后端，Key 不会下发到浏览器。未接入 LLM 时由模拟 AI 接管决策与频道对话，接入后使用正式模型。</p>
         </div>
       </section>
     </div>
@@ -713,7 +710,7 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <footer class="hint">拖拽平移 · 滚轮缩放 · 悬停查看地块</footer>
+    <footer class="hint">{{ errorMessage || '拖拽平移 · 滚轮缩放 · 悬停查看地块' }}</footer>
   </div>
 </template>
 

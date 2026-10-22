@@ -4,11 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "run-p dev:server dev:client",
+    "dev:client": "vite",
+    "dev:server": "tsx watch src-server/index.ts",
+    "server": "tsx src-server/index.ts",
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "build-only": "vite build",
-    "type-check": "vue-tsc --build"
+    "type-check": "run-p type-check:client type-check:server",
+    "type-check:client": "vue-tsc --build",
+    "type-check:server": "tsc -p tsconfig.server.json"
   },
   "dependencies": {
     "pinia": "^3.0.4",
@@ -23,6 +28,7 @@
     "@vitejs/plugin-vue": "^6.0.4",
     "@vue/tsconfig": "^0.8.1",
     "npm-run-all2": "^8.0.4",
+    "tsx": "^4.23.15",
     "typescript": "~5.9.3",
     "vite": "^7.3.1",
     "vite-plugin-vue-devtools": "^8.0.6",

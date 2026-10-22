@@ -1,6 +1,6 @@
 /**
  * LLM transport for the commander agent.
- * Any OpenAI-compatible chat completion endpoint works; configuration lives in localStorage.
+ * Any OpenAI-compatible chat completion endpoint works; configuration is held by the server.
  */
 export interface LlmConfig {
   baseUrl: string
@@ -18,42 +18,10 @@ export interface LlmClient {
   complete(messages: LlmMessage[]): Promise<string>
 }
 
-const STORAGE_KEY = 'placeholder-slg.llm-config'
-
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
   apiKey: '',
-}
-
-export function loadLlmConfig(): LlmConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { ...DEFAULT_LLM_CONFIG }
-    const parsed = JSON.parse(raw) as Partial<LlmConfig>
-    return {
-      baseUrl: parsed.baseUrl?.trim() || DEFAULT_LLM_CONFIG.baseUrl,
-      model: parsed.model?.trim() || DEFAULT_LLM_CONFIG.model,
-      apiKey: parsed.apiKey?.trim() || '',
-    }
-  } catch {
-    return { ...DEFAULT_LLM_CONFIG }
-  }
-}
-
-export function saveLlmConfig(config: LlmConfig): void {
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        baseUrl: config.baseUrl.trim(),
-        model: config.model.trim(),
-        apiKey: config.apiKey.trim(),
-      }),
-    )
-  } catch {
-    /* storage may be unavailable; the in-memory config still works */
-  }
 }
 
 /** A key is required unless the endpoint is local */

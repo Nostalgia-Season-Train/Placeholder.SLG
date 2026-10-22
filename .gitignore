@@ -1,6 +1,9 @@
 # Temp
 .tmp-browser/
 
+# Server runtime data (LLM settings with API keys)
+src-server/data/
+
 # Reference
 reference/
 

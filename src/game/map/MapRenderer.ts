@@ -4,7 +4,7 @@ import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
 import { hexCornerPoints, tileKey } from './hex'
-import { generateMap, type MapData } from './MapGenerator'
+import type { MapData } from './MapGenerator'
 import { RiverLayer } from './RiverLayer'
 import { RoadLayer } from './RoadLayer'
 import { TerrainLayer } from './TerrainLayer'
@@ -33,7 +33,8 @@ export interface MapReadyStats {
 }
 
 export interface MapRendererOptions {
-  seed?: number
+  /** 由服务端下发的权威地图数据 */
+  map: MapData
   onHover?: (info: HoverInfo | null) => void
   onReady?: (stats: MapReadyStats) => void
 }
@@ -79,7 +80,7 @@ export class MapRenderer {
   private elapsed = 0
   private lastFrame = 0
 
-  constructor(container: HTMLElement, options: MapRendererOptions = {}) {
+  constructor(container: HTMLElement, options: MapRendererOptions) {
     this.container = container
     this.options = options
 
@@ -124,7 +125,7 @@ export class MapRenderer {
     this.highlight = this.createHighlight()
     this.scene.add(this.highlight)
 
-    this.buildMap(options.seed ?? 20261021)
+    this.buildMap(options.map)
 
     const toWorld = (q: number, r: number): WorldPosition => {
       const tile = this.map?.tileMap.get(tileKey(q, r))
@@ -154,12 +155,13 @@ export class MapRenderer {
     this.renderer.setAnimationLoop(this.tick)
   }
 
-  regenerate(seed: number): void {
+  /** 用服务端下发的新地图重建渲染层 */
+  setMap(map: MapData): void {
     this.hoveredId = -1
     this.hoveredCityKey = null
     this.highlight.visible = false
     this.options.onHover?.(null)
-    this.buildMap(seed)
+    this.buildMap(map)
     this.target.set(0, 0, 0)
     this.zoom = 1
     this.targetZoom = 1
@@ -234,20 +236,20 @@ export class MapRenderer {
 
   /* ------------------------------------------------------------------ */
 
-  private buildMap(seed: number): void {
+  private buildMap(mapData: MapData): void {
     this.disposeMap()
     this.agentLayer?.clear()
     this.cityLayer?.clear()
     this.hoveredCityKey = null
 
-    const map = generateMap(seed)
+    const map = mapData
     this.map = map
     this.terrainLayer = new TerrainLayer(map)
     this.riverLayer = new RiverLayer(map.rivers)
     this.roadLayer = new RoadLayer(map.roads, map)
 
     this.mapGroup.add(this.terrainLayer.group, this.riverLayer.group, this.roadLayer.group)
-    this.options.onReady?.({ tiles: map.tiles.length, seed })
+    this.options.onReady?.({ tiles: map.tiles.length, seed: map.seed })
   }
 
   private disposeMap(): void {
