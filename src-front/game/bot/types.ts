@@ -70,6 +70,8 @@ export interface GeneralState {
   id: string
   name: string
   faction: Faction
+  /** 角色卡职位；用于地图与聊天统一的显示名 */
+  position: GeneralPosition
   coord: Coord
   speed: number
   power: number
@@ -122,6 +124,12 @@ export type GeneralPosition = (typeof GENERAL_POSITIONS)[number]
 /** Coarse stat grades used by character cards */
 export const STAT_GRADES = ['低', '中', '高'] as const
 export type StatGrade = (typeof STAT_GRADES)[number]
+
+/** 统一显示名：【同盟名】职务·角色；职位为「无」时省略职务段 */
+export function formatUnitName(faction: Faction, position: GeneralPosition, name: string): string {
+  const alliance = FACTION_NAMES[faction]
+  return position === '无' ? `【${alliance}】${name}` : `【${alliance}】${position}·${name}`
+}
 
 /** Character-card fields the simulation needs to place a unit on the map */
 export interface CardSpawn {

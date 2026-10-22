@@ -78,6 +78,8 @@ function personalityFromCard(text: string): Personality {
 function cloneGeneral(general: GeneralState): GeneralState {
   return {
     ...general,
+    // 旧存档没有职位字段，按「无」处理
+    position: general.position ?? '无',
     coord: { ...general.coord },
     personality: { ...general.personality },
     order: general.order
@@ -243,6 +245,7 @@ export class MarchSimulation {
       id: `card-${card.id}`,
       name: card.name,
       faction: card.faction,
+      position: card.position,
       coord: { ...spawn },
       speed: 0.6 + this.random() * 0.4,
       power: 32 + GRADE_SCORE[card.attack] * 10 + GRADE_SCORE[card.magic] * 7,

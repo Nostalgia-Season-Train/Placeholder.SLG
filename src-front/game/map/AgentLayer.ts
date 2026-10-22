@@ -4,7 +4,7 @@
  * It only consumes simulation snapshots and contains no simulation logic.
  */
 import * as THREE from 'three'
-import { FACTION_COLORS, type Faction, type GeneralState } from '../bot/types'
+import { FACTION_COLORS, formatUnitName, type Faction, type GeneralState } from '../bot/types'
 import {
   relationStyleOf,
   type Diplomacy,
@@ -14,6 +14,9 @@ import { HEX_WIDTH, hexCornerPoints } from './hex'
 
 /** World units walked per second; one hex takes roughly 0.55s */
 const WALK_SPEED = HEX_WIDTH / 0.55
+
+/** 名称标签高度（世界单位） */
+const LABEL_HEIGHT = 0.3
 
 export interface WorldPosition {
   x: number
@@ -29,6 +32,12 @@ interface AgentToken {
   bodyMaterial: THREE.MeshStandardMaterial
   lineMaterial: THREE.LineBasicMaterial
   ringMaterial: THREE.MeshBasicMaterial
+  /** 头顶名称标签（与世界频道作者名同格式） */
+  label: THREE.Sprite
+  labelCanvas: HTMLCanvasElement
+  labelTexture: THREE.CanvasTexture
+  labelText: string
+  labelColor: number
   /** Tile centers still to be walked through, in order */
   waypoints: THREE.Vector3[]
   tileKey: string
@@ -166,7 +175,16 @@ export class AgentLayer {
     )
     bead.position.y = 0.6
 
-    root.add(base, body, bead)
+    const labelCanvas = document.createElement('canvas')
+    const labelTexture = new THREE.CanvasTexture(labelCanvas)
+    labelTexture.colorSpace = THREE.SRGBColorSpace
+    const label = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthWrite: false }),
+    )
+    label.position.y = 0.86
+    label.renderOrder = 7
+
+    root.add(base, body, bead, label)
 
     const position = this.toWorld(general.coord.q, general.coord.r)
     root.position.set(position.x, position.y + 0.05, position.z)
@@ -191,7 +209,7 @@ export class AgentLayer {
 
     this.group.add(root, pathLine, targetRing)
 
-    return {
+    const token: AgentToken = {
       root,
       pathLine,
       targetRing,
@@ -199,15 +217,23 @@ export class AgentLayer {
       bodyMaterial,
       lineMaterial,
       ringMaterial,
+      label,
+      labelCanvas,
+      labelTexture,
+      labelText: '',
+      labelColor: -1,
       waypoints: [],
       tileKey: `${general.coord.q},${general.coord.r}`,
       walkSpeed: WALK_SPEED,
       baseY: position.y + 0.05,
       phase: this.tokens.size * 1.7,
     }
+    this.refreshLabel(token, general)
+    return token
   }
 
   private updateToken(token: AgentToken, general: GeneralState): void {
+    this.refreshLabel(token, general)
     const position = this.toWorld(general.coord.q, general.coord.r)
     token.targetPosition.set(position.x, position.y + 0.05, position.z)
 
@@ -258,6 +284,8 @@ export class AgentLayer {
     ;(token.pathLine.material as THREE.Material).dispose()
     token.targetRing.geometry.dispose()
     ;(token.targetRing.material as THREE.Material).dispose()
+    token.labelTexture.dispose()
+    ;(token.label.material as THREE.Material).dispose()
   }
 
   private rebuildOccupation(): void {
@@ -344,6 +372,16 @@ export class AgentLayer {
     token.ringMaterial.color.setHex(style.fill)
   }
 
+  /** 头顶名称与世界频道作者名同格式、同配色 */
+  private refreshLabel(token: AgentToken, general: GeneralState): void {
+    const text = formatUnitName(general.faction, general.position ?? '无', general.name)
+    const color = this.styleFor(general.faction).fill
+    if (text === token.labelText && color === token.labelColor) return
+    token.labelText = text
+    token.labelColor = color
+    drawLabelSprite(token.labelCanvas, token.labelTexture, token.label, text, color)
+  }
+
   private destroyOccupationMeshes(): void {
     for (const mesh of [this.occupationMesh, this.borderMesh]) {
       if (!mesh) continue
@@ -377,4 +415,38 @@ function hexRingShape(outerRadius: number, innerRadius: number): THREE.Shape {
   hole.closePath()
   shape.holes.push(hole)
   return shape
+}
+
+/** 把名称绘成 Canvas 贴图；正交相机下 Sprite 始终面向镜头 */
+function drawLabelSprite(
+  canvas: HTMLCanvasElement,
+  texture: THREE.CanvasTexture,
+  sprite: THREE.Sprite,
+  text: string,
+  color: number,
+): void {
+  const font = 'bold 40px "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif'
+  const probe = canvas.getContext('2d')
+  if (!probe) return
+  probe.font = font
+  const width = Math.ceil(probe.measureText(text).width) + 28
+  const height = 56
+
+  canvas.width = width
+  canvas.height = height
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.font = font
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = 6
+  ctx.strokeStyle = 'rgba(4, 8, 12, 0.85)'
+  ctx.strokeText(text, width / 2, height / 2)
+  ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`
+  ctx.fillText(text, width / 2, height / 2)
+
+  texture.needsUpdate = true
+  sprite.scale.set((LABEL_HEIGHT * width) / height, LABEL_HEIGHT, 1)
 }

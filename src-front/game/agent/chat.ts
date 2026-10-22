@@ -4,7 +4,14 @@
  * model; otherwise the simulated AI keeps both channels alive.
  */
 import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
-import { FACTIONS, FACTION_NAMES, type Faction, type SimSnapshot } from '../bot/types'
+import {
+  FACTIONS,
+  FACTION_NAMES,
+  formatUnitName,
+  type Faction,
+  type GeneralPosition,
+  type SimSnapshot,
+} from '../bot/types'
 import type { LlmClient, LlmMessage } from './llm'
 
 export type ChatChannel = 'world' | 'alliance' | 'team'
@@ -12,7 +19,7 @@ export type ChatSource = 'llm' | 'mock' | 'player' | 'system'
 
 /** 同盟发言人：职位最高的角色卡（大臣优先），AI 以其名义发言 */
 export interface FactionSpokesperson {
-  position: string
+  position: GeneralPosition
   name: string
 }
 
@@ -186,11 +193,9 @@ export class WarChat {
 
   /** 作者名格式：【同盟名】职务·角色（职位为「无」时省略职务段） */
   private authorOf(faction: Faction): string {
-    const alliance = FACTION_NAMES[faction]
     const person = this.speakers[faction]
-    if (!person) return `【${alliance}】同盟`
-    if (!person.position || person.position === '无') return `【${alliance}】${person.name}`
-    return `【${alliance}】${person.position}·${person.name}`
+    if (!person) return `【${FACTION_NAMES[faction]}】同盟`
+    return formatUnitName(faction, person.position, person.name)
   }
 
   private buildMessages(
