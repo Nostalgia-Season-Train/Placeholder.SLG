@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { getTerrainLevel, TERRAIN_LEVELS } from '@shared/map/terrainLevels'
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@shared/codec'
@@ -101,11 +101,46 @@ function factionRelationLabel(faction: Faction): string {
   return RELATION_LABELS[diplomacy.value.relations[faction]]
 }
 
+/** 频道列表只渲染最近若干条，避免长会话拖慢 DOM */
+const CHAT_ROWS = 40
+const chatListEl = ref<HTMLUListElement | null>(null)
+const stickToBottom = ref(true)
+
 const chatMessages = computed<ChatMessage[]>(() => {
-  if (chatTab.value === 'world') return worldMessages.value
-  if (chatTab.value === 'alliance') return allianceMessages.value
-  return teamMessages.value
+  const list =
+    chatTab.value === 'world'
+      ? worldMessages.value
+      : chatTab.value === 'alliance'
+        ? allianceMessages.value
+        : teamMessages.value
+  return list.slice(-CHAT_ROWS)
 })
+
+const chatTruncated = computed<boolean>(() => {
+  const total =
+    chatTab.value === 'world'
+      ? worldMessages.value.length
+      : chatTab.value === 'alliance'
+        ? allianceMessages.value.length
+        : teamMessages.value.length
+  return total > CHAT_ROWS
+})
+
+/** 滚动到底部；instant 用于切换频道与刷新后直接停在最新发言 */
+function scrollChatToBottom(instant = false): void {
+  void nextTick(() => {
+    const el = chatListEl.value
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: instant ? 'auto' : 'smooth' })
+    stickToBottom.value = true
+  })
+}
+
+function onChatScroll(): void {
+  const el = chatListEl.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+}
 
 const chatPlaceholder = computed(() => {
   if (chatTab.value === 'world') return '向世界频道发言（所有同盟的 LLM 角色可见）'
@@ -118,6 +153,20 @@ const typingText = computed(() => {
   if (!current || current.channel !== chatTab.value) return ''
   return `${current.author} 正在回复`
 })
+
+/* 切换频道与增量消息都停在底部；玩家上翻查看历史时不再强制跟随 */
+watch(chatTab, () => scrollChatToBottom(true))
+watch(
+  () => {
+    const list = chatMessages.value
+    return [list[list.length - 1]?.id, typingText.value]
+  },
+  () => {
+    if (!stickToBottom.value) return
+    // 列表还在顶部（刷新、切频道）时直接落到底部，避免从上往下滚
+    scrollChatToBottom((chatListEl.value?.scrollTop ?? 0) <= 0)
+  },
+)
 
 /* ------------------------------------------------------------------ */
 /* 服务端状态                                                          */
@@ -558,7 +607,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="chat-pane">
-        <ul class="chat-list">
+        <ul ref="chatListEl" class="chat-list" @scroll.passive="onChatScroll">
+          <li v-if="chatTruncated" class="hint">仅显示最近 {{ CHAT_ROWS }} 条</li>
           <li v-for="m in chatMessages" :key="m.id" :class="{ mine: m.source === 'player' }">
             <div class="chat-head">
               <span
@@ -1296,6 +1346,13 @@ onBeforeUnmount(() => {
   color: #9fb3b8;
   font-size: 12px;
   font-style: italic;
+}
+
+.chat-list li.hint {
+  background: none;
+  color: #7f9296;
+  font-size: 11px;
+  text-align: center;
 }
 
 .chat-list li.typing .dots {
