@@ -93,6 +93,10 @@ export function buildActorContext(
       类型: TRIGGER_LABELS[trigger.kind],
       内容: trigger.items.map((item) => {
         const text = (item.detail ?? '').trim()
+        if (item.kind === 'player') {
+          const where = item.channel === 'world' ? '世界频道' : item.channel === 'alliance' ? '同盟频道' : '本团频道'
+          return `第${item.round}回合 玩家在${where}对你说：${text}`
+        }
         return `第${item.round}回合 ${item.label}：${text}`
       }),
     },

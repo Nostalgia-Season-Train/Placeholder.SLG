@@ -38,10 +38,9 @@ export interface AgentOrderDraft {
   reason: string
 }
 
-/** 一次决策的产物：一段回应、可选发言、若干条行动指令 */
+/** 一次决策的产物：一句话与若干条行动指令 */
 export interface ActorDecision {
   reply: string
-  speech: { channel: ChatChannel; text: string } | null
   orders: AgentOrderDraft[]
   source: 'llm' | 'mock'
   error: string | null
@@ -93,19 +92,23 @@ const SYSTEM_PROMPT = `你是大地图上的一个角色，由 LLM 扮演，Bot 
 2. 职位决定指挥范围：大臣可指挥本同盟全部单位，团长可指挥本团团员，无职位者只能指挥自己的单位。
 3. 定位决定行为边界：武将、术武将可前线带兵；法师、疗愈师不统兵，只发言不下达带兵指令。
 4. stance 取 attack / defend / hold / retreat / auto。attack / defend / retreat 必须给出 target，且来自「可占领候选」或己方地块。
-5. 发言使用角色自己的口吻，承接「环境上下文」里的对话，不要重复已经说过的话。
-6. 「本轮触发」是玩家发言时，reply 直接回应玩家，可以执行、讨论、质疑或婉拒。
-7. 「随机时间」与「局势变化」时，可只更新目标，不必长篇发言。
-8. 只输出 JSON，不要输出 Markdown 或解释文字。
-9. 保持简短：reply 不超过 30 字，speech.text 不超过 60 字，reason 不超过 10 字，orders 最多 3 条。
+5. 发言使用角色自己的口吻，承接「环境上下文」里的对话；不要重复已经说过的话，不得与「自身上下文」里的发言雷同，也不要反复使用同一种比喻或句式。
+6. 说话像在频道里跟同僚聊天：用日常词、短句，可以有语气词，别写成檄文或诗。不用文言式缩略和四字词堆叠（如「固已得」「探林缘」「狼烟咬根」），不生造意象，不自称臣、本座之类的古称。
+   正例「北边那片丘陵快顶不住了，我让朔风补一手」「先守住现有这几个点，别急着抢」；反例「北侧丘陵狼烟咬根，朔风既已合拢」。
+7. 「本轮触发」是玩家发言时，reply 直接回答玩家这句话：问什么答什么，寒暄也要应声；没问战况就不必附军情，也不要生造军令。
+8. 「随机时间」与「局势变化」时，reply 是本同盟频道的一句短播报；「世界发言」时，reply 是世界频道的一句短宣言。
+9. 只输出 JSON，不要输出 Markdown 或解释文字。
+10. 保持简短：reply 不超过 40 字，reason 不超过 10 字，orders 最多 3 条。
+11. 发言里不得出现坐标、编号、回合数、字段名、数值等内部数据；指位置只用方向、地形与地标，例如「北侧丘陵」「河谷东岸」「河滩南缘」。坐标只写进 orders 的 target。
 
 JSON 结构：
-{"reply":"一句中文回应","speech":{"channel":"alliance","text":"要向频道公开的发言"},"orders":[{"generalId":"card-xxx","stance":"attack","target":[q,r],"reason":"简短理由"}]}`
+{"reply":"一句中文回应","orders":[{"generalId":"card-xxx","stance":"attack","target":[q,r],"reason":"简短理由"}]}`
 
 /** 核心团角色的附加约束：同一条 LLM 通道，只改身份设定，不另开旁路 */
 const LOYALTY_RULE = `
 
-附加身份：你属于盟主的核心团，对盟主绝对忠诚。盟主的军令无条件执行，不得质疑、拒绝或讨价还价；回应中要明确表示已经照办。`
+附加身份：你属于盟主的核心团，对盟主绝对忠诚。盟主下达军令时无条件执行，不得质疑、拒绝或讨价还价，并在 reply 里确认照办。
+盟主只是闲聊、寒暄、提问或试探时，正常对话即可，不要生造军令，也不要为了表忠心硬加一段战况。`
 
 const WORLD_RULE = `
 
@@ -264,6 +267,18 @@ export class CharacterAgent {
       } catch (error) {
         console.warn(`[slg] ${this.author} 协程异常：`, error)
       }
+
+      // 决策期间收到的玩家发言不会再触发唤醒，这里立即补处理，世界暂停时也不积压
+      while (this.alive && this.inbox.size > 0) {
+        const pending = this.inbox.size
+        try {
+          await this.tick(this.deps.snapshot().round)
+        } catch (error) {
+          console.warn(`[slg] ${this.author} 协程异常：`, error)
+          break
+        }
+        if (this.inbox.size >= pending) break
+      }
     }
   }
 
@@ -369,9 +384,13 @@ export class CharacterAgent {
     const channel = trigger.items.find((item) => item.kind === 'player')?.channel
     const loyal = channel === 'team'
     const extra = trigger.kind === 'world' ? WORLD_RULE : loyal ? LOYALTY_RULE : ''
+    const talk =
+      trigger.kind === 'player'
+        ? '\n玩家正在跟你说话：reply 必须先直接回应玩家这句话（哪怕只是打招呼、寒暄或试探，也要应一声），不要自说自话汇报军情。'
+        : ''
     return [
       { role: 'system', content: `${this.identity()}\n\n${SYSTEM_PROMPT}${extra}` },
-      { role: 'user', content: `当前局面：\n${JSON.stringify(context)}\n请输出 JSON。` },
+      { role: 'user', content: `当前局面：\n${JSON.stringify(context)}${talk}\n请输出 JSON。` },
     ]
   }
 
@@ -391,7 +410,7 @@ export class CharacterAgent {
   private parseDecision(
     raw: string,
     snapshot: SimSnapshot,
-  ): { reply: string; speech: { channel: ChatChannel; text: string } | null; orders: AgentOrderDraft[] } | null {
+  ): { reply: string; orders: AgentOrderDraft[] } | null {
     let data: unknown
     try {
       data = JSON.parse(extractJson(raw))
@@ -400,22 +419,11 @@ export class CharacterAgent {
     }
     if (typeof data !== 'object' || data === null) return null
 
-    const record = data as { reply?: unknown; speech?: unknown; orders?: unknown }
+    const record = data as { reply?: unknown; orders?: unknown }
     const reply = typeof record.reply === 'string' ? record.reply.trim() : ''
-    const speech = this.parseSpeech(record.speech)
     const orders = this.parseOrders(record.orders, snapshot)
-    if (!reply && !speech && orders.length === 0) return null
-    return { reply, speech, orders }
-  }
-
-  private parseSpeech(value: unknown): { channel: ChatChannel; text: string } | null {
-    if (typeof value !== 'object' || value === null) return null
-    const row = value as Record<string, unknown>
-    const channel = row.channel
-    if (channel !== 'world' && channel !== 'alliance' && channel !== 'team') return null
-    const text = typeof row.text === 'string' ? row.text.trim() : ''
-    if (!text) return null
-    return { channel, text }
+    if (!reply && orders.length === 0) return null
+    return { reply, orders }
   }
 
   private parseOrders(value: unknown, snapshot: SimSnapshot): AgentOrderDraft[] {
@@ -467,24 +475,22 @@ export class CharacterAgent {
   }
 
   private speak(trigger: ActorTrigger, decision: ActorDecision, round: number): void {
+    const text = decision.reply.trim()
+    if (!text) return
+
     if (trigger.kind === 'player') {
+      // 回执发到玩家发言的频道；玩家应答不受发言配额限制
       const channel = trigger.items.find((item) => item.kind === 'player')?.channel ?? 'alliance'
-      const reply =
-        decision.speech && decision.speech.channel === channel ? decision.speech.text : decision.reply
-      this.publish(channel, reply || decision.speech?.text || '', round)
-      if (decision.speech && decision.speech.channel !== channel) {
-        this.publish(decision.speech.channel, decision.speech.text, round)
-      }
+      this.post(channel, text, round)
       return
     }
 
     if (trigger.kind === 'world') {
-      this.publish('world', decision.speech?.text || decision.reply, round)
+      this.publish('world', text, round)
       return
     }
 
-    if (decision.speech) this.publish(decision.speech.channel, decision.speech.text, round)
-    else this.publish('alliance', decision.reply, round)
+    this.publish('alliance', text, round)
   }
 
   /** 发言配额超出时排队到下一回合，由 flush 补发 */
@@ -523,8 +529,7 @@ export class CharacterAgent {
   private mockDecision(trigger: ActorTrigger, snapshot: SimSnapshot): ActorDecision {
     if (trigger.kind === 'world') {
       return {
-        reply: '',
-        speech: { channel: 'world', text: this.localBroadcast(snapshot) },
+        reply: this.localBroadcast(snapshot),
         orders: [],
         source: 'mock',
         error: null,
@@ -535,7 +540,6 @@ export class CharacterAgent {
       const detail = trigger.items.map((item) => item.detail).join('；')
       return {
         reply: `${detail ? `${detail}，` : ''}${this.localAdvice(snapshot)}`,
-        speech: null,
         orders: [],
         source: 'mock',
         error: null,
@@ -604,7 +608,7 @@ export class CharacterAgent {
         ? `${STANCE_LABELS[stance]}，已向 ${assigned} 个 Bot 下达指令。`
         : `按当前战况推进，已更新 ${assigned} 个 Bot 的目标。`
 
-    return { reply, speech: null, orders, source: 'mock', error: null }
+    return { reply, orders, source: 'mock', error: null }
   }
 
   private localAdvice(snapshot: SimSnapshot): string {
