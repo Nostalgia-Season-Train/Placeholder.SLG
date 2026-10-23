@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SseHub } from './http/sse'
 import { serveStatic } from './http/static'
-import { BusyError, GameRuntime } from './runtime/GameRuntime'
+import { GameRuntime } from './runtime/GameRuntime'
 import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
 import { closeCardStore } from './runtime/cardStore'
 import {
@@ -269,7 +269,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
 const server = createServer((request, response) => {
   handle(request, response).catch((error: unknown) => {
-    const status = error instanceof HttpError ? error.status : error instanceof BusyError ? 409 : 500
+    const status = error instanceof HttpError ? error.status : 500
     const message = error instanceof Error ? error.message : '服务端错误'
     if (!response.headersSent) json(response, status, { error: message })
     else response.end()

@@ -3,8 +3,8 @@
  * Factions, generals, tile ownership, events and snapshots live here.
  * This module has no dependency on the rendering layer.
  *
- * 术语说明：General / generals 为遗留命名，指「角色」——由角色卡驱动的地图单位。
- * 「武将」仅是角色卡四种定位（武将 / 术武将 / 法师 / 疗愈师）之一，不是地图单位的通称。
+ * 术语说明：General / generals 为遗留命名，指「角色」——由角色属性驱动的地图单位。
+ * 「武将」仅是角色属性四种定位（武将 / 术武将 / 法师 / 疗愈师）之一，不是地图单位的通称。
  * Faction / FACTION_NAMES 为遗留命名，指「同盟」——北庭 / 东川 / 西陵 即同盟名，
  * 游戏概念中只有同盟，没有势力层。
  */
@@ -70,7 +70,7 @@ export interface GeneralState {
   id: string
   name: string
   faction: Faction
-  /** 角色卡职位；用于地图与聊天统一的显示名 */
+  /** 角色属性中的职位；用于地图与聊天统一的显示名 */
   position: GeneralPosition
   coord: Coord
   speed: number

@@ -108,9 +108,9 @@ const chatMessages = computed<ChatMessage[]>(() => {
 })
 
 const chatPlaceholder = computed(() => {
-  if (chatTab.value === 'world') return '向世界频道发言（所有 AI）'
-  if (chatTab.value === 'team') return '向本团 Bot 直接下达军令（不经 AI）'
-  return '向本方 AI 询问或下令'
+  if (chatTab.value === 'world') return '向世界频道发言（所有同盟的 LLM 角色可见）'
+  if (chatTab.value === 'team') return '向本团角色下达军令（经 LLM，必然照办）'
+  return '向本方角色询问或下令（经 LLM）'
 })
 
 const typingText = computed(() => {
@@ -374,7 +374,7 @@ async function removeSave(id: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 角色卡                                                              */
+/* 角色属性                                                            */
 /* ------------------------------------------------------------------ */
 
 async function refreshCards(): Promise<void> {
@@ -382,7 +382,7 @@ async function refreshCards(): Promise<void> {
   try {
     cards.value = (await api.listCards()).cards
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '读取角色卡列表失败'
+    errorMessage.value = error instanceof Error ? error.message : '读取角色属性列表失败'
   } finally {
     cardsLoading.value = false
   }
@@ -403,7 +403,7 @@ async function createCard(): Promise<void> {
     cardFormOpen.value = false
     errorMessage.value = ''
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '角色卡创建失败'
+    errorMessage.value = error instanceof Error ? error.message : '角色创建失败'
   } finally {
     cardBusy.value = false
   }
@@ -766,7 +766,7 @@ onBeforeUnmount(() => {
             </li>
           </ul>
           <p class="meta">
-            职位为「无」的角色保存后立即进驻地图；大臣与团长坐镇指挥，不亲自上前线。重新生成世界时全部角色卡重新进驻。
+            职位为「无」的角色保存后立即进驻地图；大臣与团长坐镇指挥，不亲自上前线。重新生成世界时全部角色重新进驻。
           </p>
         </div>
 

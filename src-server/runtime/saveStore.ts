@@ -63,7 +63,7 @@ export function readSave(id: string): WorldSaveDTO | null {
   if (!row) return null
   try {
     const save = JSON.parse(row.payload) as WorldSaveDTO
-    return save.version === 1 ? save : null
+    return save.version === 1 || save.version === 2 ? save : null
   } catch {
     console.warn(`[slg] 存档 ${id} 无法解析，已忽略`)
     return null

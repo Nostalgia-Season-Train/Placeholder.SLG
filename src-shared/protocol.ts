@@ -74,25 +74,40 @@ export interface ChatResult {
   messages: ChatMessage[]
 }
 
-/** Cursors the runtime keeps between rounds, saved so AI cadence resumes intact */
-export interface SaveCursorsDTO {
-  /** 下一次随机决策触发的回合；0 表示尚未排期 */
-  nextAutoRound: number
-  /** 下一次随机世界发言的回合；0 表示尚未排期 */
-  nextWorldRound: number
-  worldChatIndex: number
+/** 角色私有记忆：指令记录与发言记录，容量上限与角色系统文档一致 */
+export interface ActorMemoryDTO {
+  orders: {
+    round: number
+    generalId: string | null
+    stance: string
+    target: [number, number] | null
+    result: string
+  }[]
+  speech: { round: number; channel: ChatChannel; text: string }[]
+}
+
+/** 一个角色的协程状态：排期、冷却与私有记忆 */
+export interface ActorSaveDTO {
+  cardId: string
+  nextDecisionRound: number
+  /** 下一次世界频道发言的回合；0 表示尚未排期 */
+  nextSpeechRound: number
+  cooldownUntilRound: number
+  memory: ActorMemoryDTO
 }
 
 /** Full snapshot of one world, stored as a single save row */
 export interface WorldSaveDTO {
-  version: 1
+  /** 1：旧存档（仅有全局排期）；2：按角色存档 */
+  version: 1 | 2
   savedAt: string
   label: string
   round: number
   state: Omit<GameStateDTO, 'llmConfigured'>
   sim: SimSaveState
   chat: ChatLog
-  cursors: SaveCursorsDTO
+  /** 旧存档没有该段，读档后所有角色重新随机排期 */
+  actors?: ActorSaveDTO[]
 }
 
 export interface SaveSummaryDTO {
@@ -137,5 +152,5 @@ export type ServerEvent =
   | { type: 'state'; state: GameStateDTO }
   | { type: 'chat'; channel: ChatChannel; messages: ChatMessage[] }
   /** 发言人开始/结束输入：author 为 null 表示结束；世界频道不推送该事件 */
-  | { type: 'typing'; channel: ChatChannel; author: string | null }
+  | { type: 'typing'; channel: ChatChannel; actorId: string | null; author: string | null }
   | { type: 'reset'; world: WorldDTO }

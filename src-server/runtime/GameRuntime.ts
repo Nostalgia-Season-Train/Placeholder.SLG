@@ -1,12 +1,17 @@
 /**
- * Authoritative world runtime: owns the map, the march simulation, the AI agents,
- * chat and the tick timer. The browser only reads snapshots and posts commands.
+ * Authoritative world runtime: owns the map, the march simulation, the character
+ * agents, chat and the tick timer. The browser only reads snapshots and posts commands.
+ *
+ * 两条循环分工：世界回合循环推进 sim.step() 并广播回合信号，每个角色协程只负责
+ * 判定决策时机、组装上下文、调用 LLM、写回指令与发言（见《角色行动》2.4）。
  */
 import { generateMap, type MapData } from '../../src-shared/map/MapGenerator'
-import { MarchSimulation } from '../game/bot/simulation'
+import { MarchSimulation, type SimSignal } from '../game/bot/simulation'
 import { FACTIONS, type BotOrder, type Faction } from '../../src-shared/types'
-import { CommanderAgent, type AgentOrderDraft } from '../game/agent/commander'
-import { WarChat, type FactionSpokesperson } from '../game/agent/chat'
+import { CharacterAgent, type ActorDeps, type AgentOrderDraft } from '../game/agent/actor'
+import { ChannelLog } from '../game/agent/channel'
+import { LlmSemaphore, RoundGate, SpeechQuota, type ActorKeypoint } from '../game/agent/scheduler'
+import type { LlmClient } from '../game/agent/llm'
 import type { ChatChannel, ChatMessage } from '../../src-shared/chat'
 import { encodeSnapshot, occupationPatch } from '../../src-shared/codec'
 import type {
@@ -37,10 +42,10 @@ import {
 } from './saveStore'
 import type { SseHub } from '../http/sse'
 
-const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
-const WORLD_CHAT_INTERVAL = 20
 const AUTOSAVE_INTERVAL = 5
 const AUTO_SAVE_LABEL = '自动续档'
+/** LLM 全局并发上限：几十个角色同时排期时避免被服务商排队到超时 */
+const LLM_CONCURRENCY = 3
 
 interface RuntimeConfig {
   running: boolean
@@ -52,17 +57,16 @@ interface RuntimeConfig {
   seed: number
 }
 
-export class BusyError extends Error {
-  constructor() {
-    super('AI 正在处理上一条指令，请稍后再试')
-  }
-}
-
 export class GameRuntime {
-  private map: MapData
-  private sim: MarchSimulation
-  private commander: CommanderAgent
-  private chatPanel: WarChat
+  private map!: MapData
+  private sim!: MarchSimulation
+  private channelLog!: ChannelLog
+  private gate!: RoundGate
+  private tokens!: LlmSemaphore
+  private quota!: SpeechQuota
+  private actors: CharacterAgent[] = []
+  private llm: LlmClient | null = null
+
   private readonly config: RuntimeConfig = {
     running: true,
     speed: 650,
@@ -75,21 +79,13 @@ export class GameRuntime {
 
   private worldVersion = 1
   private runId = 0
-  private busy = false
   private timer: NodeJS.Timeout | null = null
   private lastOccupation: Map<string, Faction> | null = null
-  /** 下一次随机决策 / 随机世界发言的回合；0 表示尚未排期 */
-  private nextAutoRound = 0
-  private nextWorldRound = 0
-  private worldChatIndex = 0
 
   constructor(private readonly hub: SseHub) {
     const restored = readAutoSave()
-    const boot = restored ? this.bootFromSave(restored) : this.boot(this.config.seed)
-    this.map = boot.map
-    this.sim = boot.sim
-    this.commander = boot.commander
-    this.chatPanel = boot.chat
+    if (restored) this.applySaveState(restored)
+    this.buildWorld(restored)
     if (restored) console.log(`[slg] 已恢复自动续档：第 ${restored.round} 回合`)
     this.schedule()
   }
@@ -131,16 +127,13 @@ export class GameRuntime {
     }
   }
 
+  /** 玩家可见的频道：世界频道全部，同盟与本团频道只含本方同盟 */
   chat(): ChatLog {
     return {
-      world: this.chatPanel.list('world'),
-      alliance: this.chatPanel.list('alliance'),
-      team: this.chatPanel.list('team'),
+      world: this.channelLog.list('world', this.config.faction),
+      alliance: this.channelLog.list('alliance', this.config.faction),
+      team: this.channelLog.list('team', this.config.faction),
     }
-  }
-
-  isBusy(): boolean {
-    return this.busy
   }
 
   /* ------------------------------------------------------------------ */
@@ -170,17 +163,12 @@ export class GameRuntime {
 
   reset(seed: number): WorldDTO {
     this.runId += 1
-    this.busy = false
     this.stopTimer()
+    this.stopActors()
     this.worldVersion += 1
     this.config.seed = Number.isFinite(seed) && seed > 0 ? Math.floor(seed) : this.config.seed
 
-    const boot = this.boot(this.config.seed)
-    this.map = boot.map
-    this.sim = boot.sim
-    this.commander = boot.commander
-    this.chatPanel = boot.chat
-    this.lastOccupation = null
+    this.buildWorld(null)
 
     const world = this.world()
     writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
@@ -191,9 +179,7 @@ export class GameRuntime {
 
   updateLlm(patch: LlmPatch): LlmStatusDTO {
     const status = updateLlm(patch)
-    const client = createLlmClient()
-    this.commander.setLlm(client)
-    this.chatPanel.setLlm(client)
+    this.llm = createLlmClient()
     this.hub.broadcast({ type: 'state', state: this.state() })
     return status
   }
@@ -217,15 +203,11 @@ export class GameRuntime {
     if (!save) throw new Error('存档不存在或已损坏')
 
     this.runId += 1
-    this.busy = false
     this.stopTimer()
+    this.stopActors()
 
-    const boot = this.bootFromSave(save)
-    this.map = boot.map
-    this.sim = boot.sim
-    this.commander = boot.commander
-    this.chatPanel = boot.chat
-    this.lastOccupation = null
+    this.applySaveState(save)
+    this.buildWorld(save)
     this.worldVersion += 1
 
     const world = this.world()
@@ -240,11 +222,21 @@ export class GameRuntime {
     return this.saveList()
   }
 
+  /** 包含全部同盟频道内容的存档快照；读档后按 faction 字段恢复隔离 */
+  private saveChat(): ChatLog {
+    const messages = this.channelLog.saveState()
+    return {
+      world: messages.filter((message) => message.channel === 'world'),
+      alliance: messages.filter((message) => message.channel === 'alliance'),
+      team: messages.filter((message) => message.channel === 'team'),
+    }
+  }
+
   /** Snapshot of every mutable piece of the world, ready to persist */
   private captureSave(label: string): WorldSaveDTO {
     const sim = this.sim.saveState()
     return {
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       label,
       round: sim.round,
@@ -259,12 +251,8 @@ export class GameRuntime {
         seed: this.config.seed,
       },
       sim,
-      chat: this.chat(),
-      cursors: {
-        nextAutoRound: this.nextAutoRound,
-        nextWorldRound: this.nextWorldRound,
-        worldChatIndex: this.worldChatIndex,
-      },
+      chat: this.saveChat(),
+      actors: this.actors.map((actor) => actor.toSave()),
     }
   }
 
@@ -276,149 +264,155 @@ export class GameRuntime {
     return { cards: listCards() }
   }
 
-  /** Persist a new card and, when it should march, spawn it onto the map */
+  /** Persist a new card, spawn it when it marches, and start its coroutine */
   createCard(input: CardCreateDTO): CardListDTO {
     const card = insertCard(input)
-    this.chatPanel.setSpokespersons(this.spokespersons())
-    if (this.sim.spawnFromCard(card)) this.sendTick()
+    const spawned = this.sim.spawnFromCard(card)
+    const actor = new CharacterAgent(card, this.actorDeps())
+    this.actors.push(actor)
+    actor.start()
+    if (spawned) this.sendTick()
     return this.cardList()
   }
 
-  /** 每个同盟的发言人：职位最高的角色卡（大臣优先，其次团长），聊天作者按【同盟名】职务·角色 显示 */
-  private spokespersons(): Partial<Record<Faction, FactionSpokesperson>> {
-    const rank = (position: string): number => (position === '大臣' ? 0 : position === '团长' ? 1 : 2)
-    const result: Partial<Record<Faction, FactionSpokesperson>> = {}
-    for (const card of listCards()) {
-      const existing = result[card.faction]
-      if (!existing || rank(card.position) < rank(existing.position)) {
-        result[card.faction] = { position: card.position, name: card.name }
-      }
-    }
-    return result
-  }
-
   /* ------------------------------------------------------------------ */
-  /* AI commands                                                         */
+  /* Player input                                                        */
   /* ------------------------------------------------------------------ */
 
   async command(directive: string, faction: Faction): Promise<CommandResult> {
-    if (this.busy) throw new BusyError()
-    this.busy = true
     const runId = this.runId
+    const snapshot = this.sim.snapshot()
+    const actor = this.spokespersonOf(faction)
+    if (!actor) {
+      return { round: snapshot.round, orders: 0, reply: '', source: 'mock', error: null }
+    }
 
-    try {
-      const current = this.sim.snapshot()
-      const decision = await this.commander.decide(directive, faction, current)
-      if (runId !== this.runId) {
-        return { round: current.round, orders: 0, reply: '', source: decision.source, error: null }
-      }
-      const applied = this.applyOrders(decision.orders, current.round)
-      if (applied > 0) this.sendTick()
-      return {
-        round: current.round,
-        orders: applied,
-        reply: decision.reply,
-        source: decision.source,
-        error: decision.error,
-      }
-    } finally {
-      if (runId === this.runId) this.busy = false
+    const decision = await actor.decideNow({
+      kind: 'player',
+      round: snapshot.round,
+      items: [
+        {
+          kind: 'player',
+          round: snapshot.round,
+          label: '玩家指令',
+          detail: directive,
+          channel: 'alliance',
+          text: directive,
+        },
+      ],
+    })
+
+    // 决策之间互不阻塞，只用 runId 丢弃跨存档（重置/读档）返回的过期结果
+    if (runId !== this.runId) {
+      return { round: snapshot.round, orders: 0, reply: '', source: decision.source, error: null }
+    }
+
+    const applied = this.applyOrders(decision.orders, snapshot.round)
+    if (applied > 0) this.sendTick()
+    return {
+      round: snapshot.round,
+      orders: applied,
+      reply: decision.reply,
+      source: decision.source,
+      error: decision.error,
     }
   }
 
+  /**
+   * 玩家发言：立即写入频道并返回，不等待任何角色思考；
+   * 被唤醒的角色在各自协程里决策，回执经 chat / typing 事件送达。
+   */
   async chatSend(channel: ChatChannel, text: string, faction: Faction): Promise<ChatResult> {
-    // 本团频道：军令直达 Bot，本地同步解析，不经 AI 决策层，不受 busy 锁限制
-    if (channel === 'team') {
-      const snapshot = this.sim.snapshot()
-      this.chatPanel.postPlayer(channel, text, faction, snapshot.round)
-      this.hub.broadcast({ type: 'typing', channel, author: '团部' })
-      try {
-        const decision = this.commander.directDecision(text, faction, snapshot)
-        const applied = this.applyOrders(decision.orders, snapshot.round)
-        this.chatPanel.postSystem(channel, decision.reply, snapshot.round)
-        if (applied > 0) this.sendTick()
-        return { messages: this.chatPanel.list(channel) }
-      } finally {
-        this.hub.broadcast({ type: 'typing', channel, author: null })
-        this.broadcastChat(channel)
-      }
-    }
-
-    if (this.busy) throw new BusyError()
-    this.busy = true
-    const runId = this.runId
-
-    try {
-      const snapshot = this.sim.snapshot()
-      if (channel === 'alliance') {
-        this.chatPanel.postPlayer(channel, text, faction, snapshot.round)
-        this.broadcastChat(channel)
-
-        this.hub.broadcast({
-          type: 'typing',
-          channel,
-          author: this.chatPanel.authorName(faction),
-        })
-        try {
-          const decision = await this.commander.decide(text, faction, this.sim.snapshot())
-          if (runId !== this.runId) return { messages: [] }
-
-          const applied = this.applyOrders(decision.orders, snapshot.round)
-          this.chatPanel.postAgent(channel, faction, decision.reply, snapshot.round, decision.source)
-          this.broadcastChat(channel)
-          if (applied > 0) this.sendTick()
-        } finally {
-          this.hub.broadcast({ type: 'typing', channel, author: null })
-        }
-      } else {
-        await this.chatPanel.post(channel, text, faction, snapshot)
-        if (runId !== this.runId) return { messages: [] }
-        this.broadcastChat(channel)
-      }
-
-      return { messages: this.chatPanel.list(channel) }
-    } finally {
-      if (runId === this.runId) this.busy = false
-    }
+    const round = this.sim.snapshot().round
+    this.channelLog.pushPlayer(channel, faction, text, round)
+    this.broadcastChat(channel)
+    this.wakeForPlayer(channel, text, faction, round)
+    return { messages: this.channelLog.list(channel, this.config.faction) }
   }
 
   dispose(): void {
     this.stopTimer()
+    this.stopActors()
     writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
   }
 
   /* ------------------------------------------------------------------ */
-  /* Runtime loop                                                        */
+  /* World assembly                                                      */
   /* ------------------------------------------------------------------ */
 
-  private boot(seed: number) {
-    const map = generateMap(seed)
-    const sim = new MarchSimulation(map, this.simSeed(map))
+  private buildWorld(save: WorldSaveDTO | null): void {
+    const map = generateMap(this.config.seed)
+    const sim = new MarchSimulation(map, this.simSeed(map), save?.sim)
     sim.setEventLimit(this.config.eventLimit)
-    for (const card of listCards()) sim.spawnFromCard(card)
-    const client = createLlmClient()
-    const commander = new CommanderAgent(sim.terrain, client)
-    const chat = new WarChat(sim.terrain, client)
-    chat.setSpokespersons(this.spokespersons())
-    chat.welcome(this.config.faction, 0)
+    if (!save) {
+      for (const card of listCards()) sim.spawnFromCard(card)
+    }
 
-    this.nextAutoRound = 0
-    this.nextWorldRound = 0
-    this.worldChatIndex = 0
-    return { map, sim, commander, chat }
+    this.map = map
+    this.sim = sim
+    this.llm = createLlmClient()
+    this.channelLog = new ChannelLog()
+    this.gate = new RoundGate()
+    this.tokens = new LlmSemaphore(LLM_CONCURRENCY)
+    this.quota = new SpeechQuota()
+    this.lastOccupation = null
+
+    if (save) {
+      this.channelLog.restore([
+        ...save.chat.world,
+        ...save.chat.alliance,
+        ...(save.chat.team ?? []),
+      ])
+    } else {
+      this.channelLog.welcome(this.config.faction, 0)
+    }
+
+    this.actors = listCards().map(
+      (card) =>
+        new CharacterAgent(
+          card,
+          this.actorDeps(),
+          save?.actors?.find((state) => state.cardId === card.id),
+        ),
+    )
+    this.startActors()
   }
 
-  /** Rebuild the world components from a stored snapshot instead of a seed */
-  private bootFromSave(save: WorldSaveDTO) {
-    this.applySaveState(save)
-    const map = generateMap(this.config.seed)
-    const sim = new MarchSimulation(map, this.simSeed(map), save.sim)
-    const client = createLlmClient()
-    const commander = new CommanderAgent(sim.terrain, client)
-    const chat = new WarChat(sim.terrain, client)
-    chat.setSpokespersons(this.spokespersons())
-    chat.restoreMessages([...save.chat.world, ...save.chat.alliance, ...(save.chat.team ?? [])])
-    return { map, sim, commander, chat }
+  private startActors(): void {
+    for (const actor of this.actors) actor.start()
+  }
+
+  private stopActors(): void {
+    for (const actor of this.actors) actor.stop()
+    this.actors = []
+    this.gate?.close()
+  }
+
+  private actorDeps(): ActorDeps {
+    return {
+      gate: this.gate,
+      tokens: this.tokens,
+      quota: this.quota,
+      log: this.channelLog,
+      terrain: this.sim.terrain,
+      llm: () => this.llm,
+      snapshot: () => this.sim.snapshot(),
+      playerFaction: () => this.config.faction,
+      autoEnabled: () => this.config.autoCommand,
+      autoInterval: () => this.config.autoInterval,
+      isSpokesperson: (cardId) => {
+        for (const id of this.spokespersonIds().values()) {
+          if (id === cardId) return true
+        }
+        return false
+      },
+      applyOrders: (orders, round) => this.applyOrders(orders, round),
+      onOrdersApplied: () => this.sendTick(),
+      typing: (channel, actorId, author) => {
+        this.hub.broadcast({ type: 'typing', channel, actorId, author })
+      },
+      onChat: (channel) => this.broadcastChat(channel),
+    }
   }
 
   private applySaveState(save: WorldSaveDTO): void {
@@ -431,15 +425,93 @@ export class GameRuntime {
     this.config.faction = state.faction
     this.config.seed = state.seed
     this.worldVersion = state.worldVersion
-    // 旧存档只记录上次触发回合，没有下次排期，按「未排期」重新随机即可
-    this.nextAutoRound = save.cursors.nextAutoRound ?? 0
-    this.nextWorldRound = save.cursors.nextWorldRound ?? 0
-    this.worldChatIndex = save.cursors.worldChatIndex ?? 0
   }
 
   private simSeed(map: MapData): number {
     return ((map.seed ^ 0x9e3779b9) >>> 0) || 1
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Character routing                                                   */
+  /* ------------------------------------------------------------------ */
+
+  /** 每个同盟的发言人：职位最高的角色（大臣优先，其次团长），世界频道与玩家发言都由其回应 */
+  private spokespersonIds(): Map<Faction, string> {
+    const best = new Map<Faction, { id: string; rank: number }>()
+    const rank = (position: string): number =>
+      position === '大臣' ? 0 : position === '团长' ? 1 : 2
+    for (const card of listCards()) {
+      const current = best.get(card.faction)
+      if (!current || rank(card.position) < current.rank) {
+        best.set(card.faction, { id: card.id, rank: rank(card.position) })
+      }
+    }
+    return new Map([...best].map(([faction, value]) => [faction, value.id]))
+  }
+
+  private spokespersonOf(faction: Faction): CharacterAgent | undefined {
+    const id = this.spokespersonIds().get(faction)
+    return this.actors.find((actor) => actor.id === id)
+  }
+
+  /** 玩家发言只唤醒一个角色：同盟与本团频道交给本方发言人，世界频道交给另一个同盟 */
+  private wakeForPlayer(
+    channel: ChatChannel,
+    text: string,
+    faction: Faction,
+    round: number,
+  ): void {
+    let target: CharacterAgent | undefined
+    if (channel === 'world') {
+      const others = FACTIONS.filter((item) => item !== faction)
+      const responder = others[(round + text.length) % Math.max(1, others.length)] ?? faction
+      target = this.spokespersonOf(responder)
+    } else {
+      target = this.spokespersonOf(faction)
+    }
+
+    const label =
+      channel === 'team' ? '本团军令' : channel === 'world' ? '世界发言' : '玩家指令'
+    if (!target) return
+    target.pushKeypoint({
+      kind: 'player',
+      round,
+      label,
+      detail: text,
+      channel,
+      text,
+    })
+    // 立即唤醒一轮，省去等待下一个回合边界，玩家发言的回应更快开始
+    this.gate.broadcast(round)
+  }
+
+  /** Bot 关键点：有具体单位的交给该单位所属角色，无单位的交给同盟发言人 */
+  private dispatchSignals(): void {
+    const signals = this.sim.drainSignals()
+    for (const signal of signals) {
+      const actor = signal.generalId
+        ? this.actors.find((item) => item.generalId === signal.generalId)
+        : this.actors.find(
+            (item) =>
+              item.card.faction === signal.faction &&
+              this.spokespersonIds().get(signal.faction) === item.id,
+          )
+      actor?.pushKeypoint(this.toKeypoint(signal))
+    }
+  }
+
+  private toKeypoint(signal: SimSignal): ActorKeypoint {
+    return {
+      kind: signal.kind,
+      round: signal.round,
+      label: signal.label,
+      detail: signal.detail,
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Runtime loop                                                        */
+  /* ------------------------------------------------------------------ */
 
   private schedule(): void {
     if (this.timer || !this.config.running) return
@@ -465,58 +537,13 @@ export class GameRuntime {
 
   private advance(): void {
     this.sim.step()
-    this.sendTick()
-    this.maybeWorldChat()
-    this.maybeAutoCommand()
-    if (this.sim.snapshot().round % AUTOSAVE_INTERVAL === 0) {
+    const snapshot = this.sim.snapshot()
+    this.sendTick(snapshot)
+    this.dispatchSignals()
+    this.gate.broadcast(snapshot.round)
+    if (snapshot.round % AUTOSAVE_INTERVAL === 0) {
       writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
     }
-  }
-
-  private maybeWorldChat(): void {
-    const round = this.sim.snapshot().round
-    if (this.busy) return
-    if (this.nextWorldRound === 0) {
-      this.nextWorldRound = round + this.randomGap(WORLD_CHAT_INTERVAL)
-      return
-    }
-    if (round < this.nextWorldRound) return
-    this.nextWorldRound = round + this.randomGap(WORLD_CHAT_INTERVAL)
-    const faction = FACTIONS[this.worldChatIndex % FACTIONS.length] ?? this.config.faction
-    this.worldChatIndex += 1
-    void this.broadcastWorld(faction)
-  }
-
-  /** 随机时间触发：在基准间隔的 0.5~1.5 倍之间取下一次触发回合 */
-  private randomGap(base: number): number {
-    return Math.max(1, Math.round(base * (0.5 + Math.random())))
-  }
-
-  private async broadcastWorld(faction: Faction): Promise<void> {
-    if (this.busy) return
-    this.busy = true
-    const runId = this.runId
-    try {
-      await this.chatPanel.broadcast(faction, this.sim.snapshot())
-      if (runId !== this.runId) return
-      this.broadcastChat('world')
-    } finally {
-      if (runId === this.runId) this.busy = false
-    }
-  }
-
-  private maybeAutoCommand(): void {
-    if (!this.config.autoCommand || this.busy) return
-    const round = this.sim.snapshot().round
-    if (this.nextAutoRound === 0) {
-      this.nextAutoRound = round + this.randomGap(this.config.autoInterval)
-      return
-    }
-    if (round < this.nextAutoRound) return
-    this.nextAutoRound = round + this.randomGap(this.config.autoInterval)
-    void this.command(AUTO_DIRECTIVE, this.config.faction).catch(() => {
-      /* a skipped or failed decision leaves the bots on their own logic */
-    })
   }
 
   private applyOrders(orders: AgentOrderDraft[], round: number): number {
@@ -537,8 +564,7 @@ export class GameRuntime {
   /* Broadcasts                                                          */
   /* ------------------------------------------------------------------ */
 
-  private sendTick(): void {
-    const snapshot = this.sim.snapshot()
+  private sendTick(snapshot = this.sim.snapshot()): void {
     const patch = occupationPatch(this.lastOccupation, snapshot.occupation)
     this.lastOccupation = new Map(snapshot.occupation)
     this.hub.broadcast({
@@ -559,7 +585,7 @@ export class GameRuntime {
   }
 
   private broadcastChat(channel: ChatChannel): void {
-    const messages: ChatMessage[] = this.chatPanel.list(channel)
+    const messages: ChatMessage[] = this.channelLog.list(channel, this.config.faction)
     this.hub.broadcast({ type: 'chat', channel, messages })
   }
 }

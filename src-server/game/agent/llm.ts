@@ -55,6 +55,10 @@ export class OpenAiCompatClient implements LlmClient {
           model: this.config.model,
           messages,
           temperature: 0.4,
+          // 关闭思考模式：思考 token 不进入回复，只会拉长等待
+          thinking: { type: 'disabled' },
+          // 限制回复长度：角色发言只需一两句话，长文生成是延迟的主要来源
+          max_tokens: 240,
         }),
       })
 

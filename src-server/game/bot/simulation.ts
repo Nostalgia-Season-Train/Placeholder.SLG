@@ -43,6 +43,19 @@ const CITY_RADIUS_RATIO = 0.32
 /** Stances that require the bot to march to an explicit tile */
 const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
 
+/** 关键点信号：交给角色协程判断，本身不参与推演、不消费随机数 */
+export type SimSignalKind = 'encounter' | 'capture' | 'defeat' | 'blocked' | 'lost'
+
+export interface SimSignal {
+  kind: SimSignalKind
+  faction: Faction
+  /** 相关单位；地块易手这类没有具体单位的变化为 null */
+  generalId: string | null
+  round: number
+  label: string
+  detail: string
+}
+
 /** Stat grades mapped onto a 1..3 power scale */
 const GRADE_SCORE: Record<StatGrade, number> = { 低: 1, 中: 2, 高: 3 }
 
@@ -98,6 +111,7 @@ export class MarchSimulation {
   private readonly generals: GeneralState[]
   private readonly occupation = new Map<string, Faction>()
   private readonly events: SimEvent[] = []
+  private readonly signals: SimSignal[] = []
   private round = 0
   private occupationVersion = 0
   private eventLimit = 14
@@ -159,6 +173,11 @@ export class MarchSimulation {
   /** Number of recent events kept in each snapshot */
   setEventLimit(limit: number): void {
     this.eventLimit = Math.max(1, Math.floor(limit))
+  }
+
+  /** 取走本轮累积的关键点信号，供角色系统唤醒对应角色 */
+  drainSignals(): SimSignal[] {
+    return this.signals.splice(0, this.signals.length)
   }
 
   /** Read-only snapshot shared with the rendering layer */
@@ -418,6 +437,16 @@ export class MarchSimulation {
       general.faction,
       `${general.name}占领${tile.level}级${tile.name}（${general.coord.q},${general.coord.r}）`,
     )
+    this.signal('capture', general.faction, general.id, '占领成功', `${general.name}占领${tile.name}`)
+    if (owner) {
+      this.signal(
+        'lost',
+        owner,
+        null,
+        '地块易手',
+        `${tile.name}被${general.name}夺取`,
+      )
+    }
   }
 
   /** Move a bot toward the tile named by its order, recomputing the path when needed */
@@ -430,6 +459,7 @@ export class MarchSimulation {
     const tile = getTile(this.terrain, order.target)
     if (!tile?.passable) {
       general.order = null
+      this.signal('blocked', general.faction, general.id, '目标失效', `${general.name}的指令目标不可通行`)
       return
     }
 
@@ -443,6 +473,7 @@ export class MarchSimulation {
       const result = findPath(this.terrain, general.coord, order.target)
       if (!result) {
         general.order = null
+        this.signal('blocked', general.faction, general.id, '行军受阻', `${general.name}无法抵达指令目标`)
         return
       }
       general.target = { ...order.target }
@@ -496,6 +527,8 @@ export class MarchSimulation {
       winner.faction,
       `${winner.name}击退${loser.name}，夺取${getTile(this.terrain, winner.coord)?.name ?? '地块'}`,
     )
+    this.signal('encounter', winner.faction, winner.id, '遭遇战', `${winner.name}击退${loser.name}`)
+    this.signal('defeat', loser.faction, loser.id, '遭遇战失利', `${loser.name}被${winner.name}击退，转入休整`)
   }
 
   private retreatTile(loser: GeneralState): Coord | null {
@@ -527,5 +560,16 @@ export class MarchSimulation {
   private log(faction: Faction, text: string): void {
     this.events.push({ round: this.round, faction, text })
     if (this.events.length > 80) this.events.splice(0, this.events.length - 80)
+  }
+
+  private signal(
+    kind: SimSignalKind,
+    faction: Faction,
+    generalId: string | null,
+    label: string,
+    detail: string,
+  ): void {
+    this.signals.push({ kind, faction, generalId, round: this.round, label, detail })
+    if (this.signals.length > 200) this.signals.splice(0, this.signals.length - 200)
   }
 }
