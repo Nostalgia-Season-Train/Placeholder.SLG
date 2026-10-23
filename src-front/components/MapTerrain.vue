@@ -116,16 +116,6 @@ const chatMessages = computed<ChatMessage[]>(() => {
   return list.slice(-CHAT_ROWS)
 })
 
-const chatTruncated = computed<boolean>(() => {
-  const total =
-    chatTab.value === 'world'
-      ? worldMessages.value.length
-      : chatTab.value === 'alliance'
-        ? allianceMessages.value.length
-        : teamMessages.value.length
-  return total > CHAT_ROWS
-})
-
 /** 滚动到底部；instant 用于切换频道与刷新后直接停在最新发言 */
 function scrollChatToBottom(instant = false): void {
   void nextTick(() => {
@@ -608,7 +598,6 @@ onBeforeUnmount(() => {
 
       <div class="chat-pane">
         <ul ref="chatListEl" class="chat-list" @scroll.passive="onChatScroll">
-          <li v-if="chatTruncated" class="hint">仅显示最近 {{ CHAT_ROWS }} 条</li>
           <li v-for="m in chatMessages" :key="m.id" :class="{ mine: m.source === 'player' }">
             <div class="chat-head">
               <span
@@ -1346,13 +1335,6 @@ onBeforeUnmount(() => {
   color: #9fb3b8;
   font-size: 12px;
   font-style: italic;
-}
-
-.chat-list li.hint {
-  background: none;
-  color: #7f9296;
-  font-size: 11px;
-  text-align: center;
 }
 
 .chat-list li.typing .dots {
