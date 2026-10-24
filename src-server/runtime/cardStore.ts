@@ -7,7 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { CardCreateDTO, CharacterCardDTO } from '../../src-shared/protocol'
-import type { GeneralTeam } from '../../src-shared/types'
+import { GENERAL_TEAMS, type GeneralTeam } from '../../src-shared/types'
 
 const DB_PATH = resolve('src-server/data/cards.db')
 
@@ -42,7 +42,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '烈风',
     faction: 'red',
-    team: '团1',
+    team: null,
     role: '武将',
     position: '无',
     attack: '高',
@@ -226,7 +226,9 @@ function toDto(row: CardRow): CharacterCardDTO {
     id: row.id,
     name: row.name,
     faction: row.faction,
-    team: row.team ? (row.team as GeneralTeam) : null,
+    team: (GENERAL_TEAMS as readonly string[]).includes(row.team)
+      ? (row.team as GeneralTeam)
+      : null,
     role: row.role,
     position: row.position,
     attack: row.attack,

@@ -420,7 +420,7 @@ async function saveCard(payload: CardCreateDTO): Promise<void> {
 function cardMeta(card: CharacterCardDTO): string {
   const parts = [
     allianceNameOf(allianceNames.value, card.faction),
-    card.team ?? '无团',
+    card.faction === agentFaction.value ? (card.team ?? '无团') : '不分团',
     card.role,
     `职位 ${card.position === '无' ? '无（上前线）' : card.position}`,
     `攻击 ${card.attack}`,

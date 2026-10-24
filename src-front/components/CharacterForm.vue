@@ -89,6 +89,21 @@ const factionOptions = computed(() => {
   return options
 })
 
+/** 只有我方同盟分团，其余同盟的团固定为无团 */
+const selfFaction = computed(
+  () => props.alliances.find((alliance) => alliance.relation === 'self')?.faction ?? 'red',
+)
+const showTeam = computed(
+  () => showAssignment.value && draft.value.faction === selfFaction.value,
+)
+
+watch(
+  () => draft.value.faction,
+  (faction) => {
+    if (faction !== selfFaction.value) draft.value.team = null
+  },
+)
+
 const teamValue = computed({
   get: () => draft.value.team ?? '',
   set: (value: string) => {
@@ -130,13 +145,17 @@ function submit(): void {
               </option>
             </select>
           </label>
-          <label class="field">
+          <label v-if="showTeam" class="field">
             <span>团</span>
             <select v-model="teamValue">
               <option value="">无团</option>
               <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
             </select>
           </label>
+          <div v-else class="field">
+            <span>团</span>
+            <p class="field-note">仅我方同盟分团</p>
+          </div>
         </template>
         <label class="field">
           <span>定位</span>
@@ -300,6 +319,12 @@ function submit(): void {
 
 .field textarea {
   resize: vertical;
+}
+
+.field-note {
+  margin: 0;
+  font-size: 11px;
+  color: #6f7d82;
 }
 
 .form-error {

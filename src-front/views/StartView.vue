@@ -57,6 +57,10 @@ const availableSlots = computed(() =>
 )
 const canAddAlliance = computed(() => availableSlots.value.length > 0)
 const diplomacy = computed(() => createDiplomacy(alliances.value))
+/** 只有我方同盟分团 */
+const selfFaction = computed(
+  () => alliances.value.find((alliance) => alliance.relation === 'self')?.faction ?? 'red',
+)
 /** 已加入本局的角色与角色库中的闲置角色 */
 const rosterCards = computed(() => cards.value.filter((card) => card.active))
 const idleCards = computed(() => cards.value.filter((card) => !card.active))
@@ -152,7 +156,8 @@ async function patchCard(card: CharacterCardDTO, patch: Partial<CardCreateDTO>):
 }
 
 function onCardFactionChange(card: CharacterCardDTO, faction: Faction): void {
-  void patchCard(card, { faction })
+  // 只有我方同盟分团，换到其他同盟时清空团
+  void patchCard(card, { faction, ...(faction === selfFaction.value ? {} : { team: null }) })
 }
 
 function onCardTeamChange(card: CharacterCardDTO, team: string): void {
@@ -371,6 +376,15 @@ onMounted(async () => {
                   <span class="meta">{{ rosterMeta(card) }}</span>
                 </div>
                 <select
+                  v-if="card.faction === selfFaction"
+                  :value="card.team ?? ''"
+                  @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">无团</option>
+                  <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
+                </select>
+                <span v-else class="meta team-none">不分团</span>
+                <select
                   :value="card.faction"
                   @change="onCardFactionChange(card, ($event.target as HTMLSelectElement).value as Faction)"
                 >
@@ -387,13 +401,6 @@ onMounted(async () => {
                   >
                     {{ allianceNameOf(card.faction) }}
                   </option>
-                </select>
-                <select
-                  :value="card.team ?? ''"
-                  @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="">无团</option>
-                  <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
                 </select>
                 <button type="button" class="ghost" @click="openEditCard(card, 'assign')">
                   编辑
@@ -674,6 +681,14 @@ onMounted(async () => {
   padding: 2px 8px;
   font-size: 10px;
   color: #9fadb0;
+}
+
+.team-none {
+  flex: none;
+  box-sizing: border-box;
+  width: 108px;
+  padding: 5px 7px;
+  text-align: center;
 }
 
 .world-stats {

@@ -170,8 +170,8 @@ export type GeneralRole = (typeof GENERAL_ROLES)[number]
 export const GENERAL_POSITIONS = ['无', '团长', '大臣'] as const
 export type GeneralPosition = (typeof GENERAL_POSITIONS)[number]
 
-/** 团编制；本团为玩家所在的核心团，团1 为下属团 */
-export const GENERAL_TEAMS = ['本团', '团1'] as const
+/** 团编制；仅我方同盟会分团，本团为玩家所在的核心团 */
+export const GENERAL_TEAMS = ['本团'] as const
 export type GeneralTeam = (typeof GENERAL_TEAMS)[number]
 
 /** Coarse stat grades used by character cards */

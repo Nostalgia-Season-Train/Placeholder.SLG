@@ -23,6 +23,7 @@ import { encodeSnapshot, occupationPatch } from '../../src-shared/codec'
 import type {
   CardCreateDTO,
   CardListDTO,
+  CharacterCardDTO,
   ChatLog,
   ChatResult,
   CommandResult,
@@ -294,12 +295,12 @@ export class GameRuntime {
   /* ------------------------------------------------------------------ */
 
   cardList(): CardListDTO {
-    return { cards: listCards() }
+    return { cards: listCards().map((card) => this.normalizeCard(card)) }
   }
 
   /** Persist a new card; it joins the roster only when explicitly marked active */
   createCard(input: CardCreateDTO): CardListDTO {
-    const card = insertCard(input)
+    const card = insertCard(this.withTeam(input))
     if (!card.active) return this.cardList()
     const spawned = this.sim.spawnFromCard(card)
     const actor = new CharacterAgent(card, this.actorDeps())
@@ -311,8 +312,19 @@ export class GameRuntime {
 
   /** 编辑一张角色卡；改动在下一局开始时生效 */
   editCard(id: string, input: CardCreateDTO): CardListDTO {
-    if (!updateCard(id, input)) throw new Error('角色不存在')
+    if (!updateCard(id, this.withTeam(input))) throw new Error('角色不存在')
     return this.cardList()
+  }
+
+  /** 只有我方同盟分团，其他同盟的团字段一律忽略 */
+  private withTeam(input: CardCreateDTO): CardCreateDTO {
+    if (input.faction === this.config.faction) return input
+    return { ...input, team: null }
+  }
+
+  private normalizeCard(card: CharacterCardDTO): CharacterCardDTO {
+    if (card.faction === this.config.faction || card.team === null) return card
+    return { ...card, team: null }
   }
 
   /* ------------------------------------------------------------------ */
@@ -384,7 +396,9 @@ export class GameRuntime {
     const map = loadPresetMap()
     const sim = new MarchSimulation(map, this.simSeed(map), getAlliances(), save?.sim)
     sim.setEventLimit(this.config.eventLimit)
-    const roster = listCards().filter((card) => card.active)
+    const roster = listCards()
+      .filter((card) => card.active)
+      .map((card) => this.normalizeCard(card))
     if (!save) {
       for (const card of roster) sim.spawnFromCard(card)
     }
