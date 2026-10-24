@@ -24,6 +24,8 @@ export interface HoverInfo {
   desc: string
   height: number
   isBank: boolean
+  isWall: boolean
+  isGate: boolean
   city?: HoverCity | null
 }
 
@@ -448,6 +450,8 @@ export class MapRenderer {
         desc: `${FACTION_NAMES[city.faction]}小队出发地`,
         height: tile.height,
         isBank: false,
+        isWall: false,
+        isGate: false,
         city: {
           name: city.name,
           faction: city.faction,
@@ -475,7 +479,19 @@ export class MapRenderer {
     this.highlight.position.set(tile.x, tile.height + 0.03, tile.z)
     this.highlight.visible = true
 
-    if (tile.isBank) {
+    if (tile.isWall || tile.isGate) {
+      this.options.onHover?.({
+        q: tile.q,
+        r: tile.r,
+        level: tile.level,
+        name: tile.isGate ? '关口' : '城墙',
+        desc: tile.isGate ? '连接相邻区域的唯一通道，可被攻占' : '划分地图区域的城墙，无法通行',
+        height: tile.height,
+        isBank: false,
+        isWall: tile.isWall,
+        isGate: tile.isGate,
+      })
+    } else if (tile.isBank) {
       this.options.onHover?.({
         q: tile.q,
         r: tile.r,
@@ -484,6 +500,8 @@ export class MapRenderer {
         desc: '河道两侧的滩涂，无法建造',
         height: tile.height,
         isBank: true,
+        isWall: false,
+        isGate: false,
       })
     } else {
       const def = getTerrainLevel(tile.level)
@@ -495,6 +513,8 @@ export class MapRenderer {
         desc: def.desc,
         height: tile.height,
         isBank: false,
+        isWall: false,
+        isGate: false,
       })
     }
   }

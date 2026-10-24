@@ -17,6 +17,14 @@ export interface TerrainLevelDef {
 export const BANK_HEIGHT = 0.05
 export const BANK_COLOR = 0xb7a67a
 
+/** 分区边界上的城墙：不可通行 */
+export const WALL_HEIGHT = 0.92
+export const WALL_COLOR = 0x5d6066
+
+/** 分区边界上的关口：可通行，可被占领 */
+export const GATE_HEIGHT = 0.56
+export const GATE_COLOR = 0xb08a4a
+
 export const TERRAIN_LEVELS: TerrainLevelDef[] = [
   { level: 0, name: '荒地', height: 0.14, color: 0x9a9063, desc: '干枯的平原，几乎没有产出' },
   { level: 1, name: '草地', height: 0.2, color: 0x6f9a3e, desc: '低缓的草地，基础资源地' },

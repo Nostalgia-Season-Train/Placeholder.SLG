@@ -84,15 +84,25 @@ export function buildTerrain(map: MapData): WorldTerrain {
     let moveCost = base
     if (tile.isBank && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.9)
     if (nearRoad && Number.isFinite(moveCost)) moveCost = Math.max(0.62, moveCost * 0.6)
+    // 关口是城墙上的唯一通道，保持较高的通行成本
+    if (tile.isGate && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.4)
 
-    const passable = !tile.isWater && Number.isFinite(moveCost)
+    const passable = !tile.isWater && !tile.isWall && Number.isFinite(moveCost)
     const value = passable
-      ? Math.round((tile.level + 1) * 8 + (nearRoad ? 6 : 0) + (tile.isBank ? -4 : 0))
+      ? tile.isGate
+        ? 40
+        : Math.round((tile.level + 1) * 8 + (nearRoad ? 6 : 0) + (tile.isBank ? -4 : 0))
       : 0
 
     const info: TileInfo = {
       coord: { q: tile.q, r: tile.r },
-      name: tile.isBank ? '河滩' : getTerrainLevel(tile.level).name,
+      name: tile.isWall
+        ? '城墙'
+        : tile.isGate
+          ? '关口'
+          : tile.isBank
+            ? '河滩'
+            : getTerrainLevel(tile.level).name,
       x: tile.x,
       z: tile.z,
       height: tile.height,

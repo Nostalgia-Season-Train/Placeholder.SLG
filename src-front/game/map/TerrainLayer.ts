@@ -1,7 +1,13 @@
 import * as THREE from 'three'
 import { HEX_RADIUS } from '@shared/map/hex'
 import { tileRng, type MapData, type MapTile } from '@shared/map/MapGenerator'
-import { BANK_COLOR, BANK_HEIGHT, getTerrainLevel } from '@shared/map/terrainLevels'
+import {
+  BANK_COLOR,
+  BANK_HEIGHT,
+  GATE_COLOR,
+  WALL_COLOR,
+  getTerrainLevel,
+} from '@shared/map/terrainLevels'
 
 interface DecorInstance {
   x: number
@@ -57,7 +63,13 @@ export class TerrainLayer {
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
 
-      const baseColor = tile.isBank ? BANK_COLOR : getTerrainLevel(tile.level).color
+      const baseColor = tile.isWall
+        ? WALL_COLOR
+        : tile.isGate
+          ? GATE_COLOR
+          : tile.isBank
+            ? BANK_COLOR
+            : getTerrainLevel(tile.level).color
       const shade = 0.94 + tileRng(map.seed, tile.q, tile.r)() * 0.1
       color.setHex(baseColor).multiplyScalar(shade)
       mesh.setColorAt(index, color)
@@ -77,15 +89,18 @@ export class TerrainLayer {
     const peaks: DecorInstance[] = []
     const tallPeaks: DecorInstance[] = []
     const snowCaps: DecorInstance[] = []
+    const merlons: DecorInstance[] = []
+    const gatePosts: DecorInstance[] = []
+    const gateLintels: DecorInstance[] = []
 
     const tint = (hex: number, rand: () => number, amount = 0.1) =>
       new THREE.Color(hex).offsetHSL(0, (rand() - 0.5) * 0.03, (rand() - 0.5) * amount).getHex()
 
     for (const tile of map.tiles) {
-      if (tile.isBank) continue
-
       const rand = tileRng(map.seed, tile.q, tile.r)
       const top = tile.height
+
+      if (tile.isBank && !tile.isWall && !tile.isGate) continue
 
       const scatter = (radius: number): DecorInstance => {
         const angle = rand() * Math.PI * 2
@@ -130,6 +145,42 @@ export class TerrainLayer {
           item.color = tint(0x8a8578, rand, 0.16)
           rocks.push(item)
         }
+      }
+
+      if (tile.isWall) {
+        // 城墙顶部的垛口
+        for (let i = 0; i < 3; i++) {
+          const item = scatter(0.55)
+          item.scale = 1.05 + rand() * 0.2
+          item.color = tint(0x7c8088, rand, 0.1)
+          merlons.push(item)
+        }
+        continue
+      }
+
+      if (tile.isGate) {
+        // 关口两侧的门柱与横梁，朝向地图中心
+        const facing = Math.atan2(-tile.z, -tile.x)
+        const sideways = facing + Math.PI / 2
+        for (const side of [-1, 1]) {
+          gatePosts.push({
+            x: tile.x + Math.cos(sideways) * 0.24 * side,
+            y: top,
+            z: tile.z + Math.sin(sideways) * 0.24 * side,
+            rotY: 0,
+            scale: 1,
+            color: tint(0x8b6f3e, rand, 0.08),
+          })
+        }
+        gateLintels.push({
+          x: tile.x,
+          y: top + 0.26,
+          z: tile.z,
+          rotY: -sideways,
+          scale: 1,
+          color: GATE_COLOR,
+        })
+        continue
       }
 
       switch (tile.level) {
@@ -210,6 +261,21 @@ export class TerrainLayer {
         geometry: coneGeometry(0.18, 0.45, 6, 1.15),
         material: decorMaterial(false),
         items: snowCaps,
+      },
+      {
+        geometry: new THREE.BoxGeometry(0.13, 0.18, 0.13).translate(0, 0.09, 0),
+        material: decorMaterial(false),
+        items: merlons,
+      },
+      {
+        geometry: new THREE.CylinderGeometry(0.045, 0.06, 0.3, 6).translate(0, 0.15, 0),
+        material: decorMaterial(false),
+        items: gatePosts,
+      },
+      {
+        geometry: new THREE.BoxGeometry(0.52, 0.1, 0.14),
+        material: decorMaterial(false),
+        items: gateLintels,
       },
     ]
 

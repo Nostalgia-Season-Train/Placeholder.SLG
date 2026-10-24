@@ -105,8 +105,8 @@ export class GameRuntime {
   }
 
   mapDto(): MapDTO {
-    const { seed, cols, rows, tiles, rivers, roads, bounds } = this.map
-    return { seed, cols, rows, tiles, rivers, roads, bounds }
+    const { seed, cols, rows, tiles, rivers, roads, bounds, spawns } = this.map
+    return { seed, cols, rows, tiles, rivers, roads, bounds, spawns }
   }
 
   snapshot(): SnapshotDTO {

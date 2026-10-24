@@ -3,7 +3,6 @@
  * march along their path and spend a few rounds capturing the tile.
  * Hostile generals sharing a tile settle it by combat power.
  */
-import { worldToAxial } from '../../../src-shared/map/hex'
 import { createSeedRandom, type MapData, type SeedRandom } from '../../../src-shared/map/MapGenerator'
 import { chooseTarget } from './decision'
 import { findPath } from './pathfinding'
@@ -33,12 +32,6 @@ import {
   type SimSnapshot,
   type StatGrade,
 } from '../../../src-shared/types'
-
-/** Directions of the three home cities, measured from the map center */
-const BASE_ANGLES = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
-
-/** Home cities sit on a ring at this ratio of the shorter map side */
-const CITY_RADIUS_RATIO = 0.32
 
 /** Stances that require the bot to march to an explicit tile */
 const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
@@ -209,28 +202,19 @@ export class MarchSimulation {
   /* Setup                                                               */
   /* ------------------------------------------------------------------ */
 
-  /** One home city per faction; its tile starts owned by that faction */
+  /** One home city per faction, placed at the spawn site inside its region */
   private createCities(map: MapData): BaseCity[] {
-    const centerX = (map.bounds.minX + map.bounds.maxX) / 2
-    const centerZ = (map.bounds.minZ + map.bounds.maxZ) / 2
-    const radius =
-      Math.min(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ) *
-      CITY_RADIUS_RATIO
-    const taken = new Set<string>()
     const result: BaseCity[] = []
 
     FACTIONS.forEach((faction, factionIndex) => {
-      const angle = BASE_ANGLES[factionIndex] ?? 0
-      const seedCoord = worldToAxial(
-        centerX + Math.cos(angle) * radius,
-        centerZ + Math.sin(angle) * radius,
-      )
-      const coord =
-        nearestCapturable(this.terrain, seedCoord, taken) ??
-        nearestCapturable(this.terrain, seedCoord)
+      const anchor = map.spawns[factionIndex]
+      const coord = anchor
+        ? getTile(this.terrain, anchor)?.passable
+          ? { ...anchor }
+          : nearestCapturable(this.terrain, anchor)
+        : null
       if (!coord) return
 
-      taken.add(coordKey(coord))
       this.occupation.set(coordKey(coord), faction)
       result.push({ faction, coord: { ...coord }, name: `${FACTION_NAMES[faction]}主城` })
       this.log(faction, `${FACTION_NAMES[faction]}主城设立于（${coord.q},${coord.r}）`)

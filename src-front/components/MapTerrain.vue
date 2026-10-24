@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
-import { getTerrainLevel, TERRAIN_LEVELS } from '@shared/map/terrainLevels'
+import { GATE_COLOR, WALL_COLOR, getTerrainLevel, TERRAIN_LEVELS } from '@shared/map/terrainLevels'
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@shared/codec'
 import { WorldApi } from '@/game/api/client'
 import type {
@@ -536,12 +536,16 @@ onBeforeUnmount(() => {
             :style="{
               background: hover.city
                 ? relationColorCss(hover.city.faction)
-                : hover.isBank
-                  ? '#b7a67a'
-                  : levelColor(hover.level),
+                : hover.isGate
+                  ? toCss(GATE_COLOR)
+                  : hover.isWall
+                    ? toCss(WALL_COLOR)
+                    : hover.isBank
+                      ? '#b7a67a'
+                      : levelColor(hover.level),
             }"
           >
-            {{ hover.city ? '城' : hover.isBank ? '滩' : hover.level }}
+            {{ hover.city ? '城' : hover.isGate ? '关' : hover.isWall ? '墙' : hover.isBank ? '滩' : hover.level }}
           </span>
           <strong>{{ hover.name }}</strong>
         </div>
@@ -908,6 +912,14 @@ onBeforeUnmount(() => {
               <span class="swatch city"></span><span class="name">城池</span>
               <span class="ldesc">同盟主城，小队由此出发</span>
             </li>
+            <li>
+              <span class="swatch wall"></span><span class="name">城墙</span>
+              <span class="ldesc">划分区域，不可通行</span>
+            </li>
+            <li>
+              <span class="swatch gate"></span><span class="name">关口</span>
+              <span class="ldesc">连接相邻区域的唯一通道，可被攻占</span>
+            </li>
           </ul>
 
           <h3>同盟与外交</h3>
@@ -1061,6 +1073,14 @@ onBeforeUnmount(() => {
 
 .swatch.city {
   background: #9a927f;
+}
+
+.swatch.wall {
+  background: #5d6066;
+}
+
+.swatch.gate {
+  background: #b08a4a;
 }
 
 .lv {

@@ -1,5 +1,6 @@
 import { HEX_WIDTH, HEX_ROW_HEIGHT, axialToWorld, tileKey, worldToAxial, type PlanePoint } from './hex'
-import { BANK_HEIGHT, getTerrainLevel } from './terrainLevels'
+import type { Coord } from '../types'
+import { BANK_HEIGHT, GATE_HEIGHT, WALL_HEIGHT, getTerrainLevel } from './terrainLevels'
 
 export interface MapTile {
   q: number
@@ -12,6 +13,10 @@ export interface MapTile {
   isBank: boolean
   /** 完全位于水面之下 */
   isWater: boolean
+  /** 分区边界上的城墙，不可通行 */
+  isWall: boolean
+  /** 分区边界上的关口，可通行 */
+  isGate: boolean
 }
 
 export interface MapBounds {
@@ -30,6 +35,8 @@ export interface MapData {
   rivers: PlanePoint[][]
   roads: PlanePoint[][]
   bounds: MapBounds
+  /** 三处出生点，顺序与阵营顺序一致 */
+  spawns: Coord[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -230,6 +237,8 @@ export function generateMap(seed: number): MapData {
       height: def.height + (rng() - 0.5) * 0.04,
       isBank: false,
       isWater: false,
+      isWall: false,
+      isGate: false,
     }
   })
 
@@ -314,6 +323,9 @@ export function generateMap(seed: number): MapData {
     createVerticalRoad(bounds, rng, 0.52, (bounds.maxX - bounds.minX) * 0.06, rng() * Math.PI * 2),
   ]
 
+  // 分区：三条分界线自地图中心延伸到边缘，用城墙、山脉与河流把地图切成三块
+  const spawns = createRegions(tiles, tileMap, bounds)
+
   return {
     seed,
     cols,
@@ -323,7 +335,173 @@ export function generateMap(seed: number): MapData {
     rivers,
     roads,
     bounds,
+    spawns,
   }
+}
+
+/** 三处分区出生点的方向，和推演层保持一致 */
+const SPAWN_ANGLES = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
+
+/** 三条分界线位于相邻出生点的正中方向 */
+const BOUNDARY_ANGLES = [-Math.PI / 6, Math.PI / 2, (7 * Math.PI) / 6]
+
+/** 出生点距地图中心的距离比例 */
+const SPAWN_RADIUS_RATIO = 0.32
+
+/** 分界线靠近中心的这一段用城墙，更外侧由连续山脉封住 */
+const WALL_SEGMENT_RADIUS = 6
+
+/** 每条分界线上的关口位置（以地块计） */
+const GATE_RADIUS = 4
+
+const NEIGHBOR_OFFSETS: Coord[] = [
+  { q: 1, r: 0 },
+  { q: 1, r: -1 },
+  { q: 0, r: -1 },
+  { q: -1, r: 0 },
+  { q: -1, r: 1 },
+  { q: 0, r: 1 },
+]
+
+function hexDistance(a: Coord, b: Coord): number {
+  const dq = a.q - b.q
+  const dr = a.r - b.r
+  return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2
+}
+
+function nearestTile(tiles: MapTile[], coord: Coord): MapTile | null {
+  let best: MapTile | null = null
+  let bestDistance = Infinity
+  for (const tile of tiles) {
+    const distance = hexDistance(tile, coord)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = tile
+    }
+  }
+  return best
+}
+
+function cubeRound(x: number, y: number, z: number): Coord {
+  let rx = Math.round(x)
+  let ry = Math.round(y)
+  let rz = Math.round(z)
+  const dx = Math.abs(rx - x)
+  const dy = Math.abs(ry - y)
+  const dz = Math.abs(rz - z)
+  if (dx > dy && dx > dz) rx = -ry - rz
+  else if (dy > dz) ry = -rx - rz
+  else rz = -rx - ry
+  return { q: rx, r: rz }
+}
+
+/** 两点之间的连续地块序列，保证分界线没有断口 */
+function hexLine(a: Coord, b: Coord): Coord[] {
+  const steps = hexDistance(a, b)
+  const result: Coord[] = []
+  for (let i = 0; i <= steps; i++) {
+    const t = steps === 0 ? 0 : i / steps
+    const ax = a.q
+    const az = a.r
+    const ay = -ax - az
+    const bx = b.q
+    const bz = b.r
+    const by = -bx - bz
+    result.push(
+      cubeRound(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t),
+    )
+  }
+  return result
+}
+
+/** 把出生点腹地压平，保证主城与小队有可站立的地块 */
+function flattenPocket(tiles: MapTile[], center: Coord): void {
+  for (const tile of tiles) {
+    if (hexDistance(tile, center) > 1) continue
+    tile.isWater = false
+    tile.isBank = false
+    tile.level = 1
+    tile.height = getTerrainLevel(1).height
+  }
+}
+
+/** 用分界线把地图切成三块，并在每块内部放置一处出生点 */
+function createRegions(
+  tiles: MapTile[],
+  tileMap: Map<string, MapTile>,
+  bounds: MapBounds,
+): Coord[] {
+  const centerX = (bounds.minX + bounds.maxX) / 2
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2
+  const reach = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ)
+  const center: Coord = { q: 0, r: 0 }
+
+  for (const angle of BOUNDARY_ANGLES) {
+    const far = worldToAxial(
+      centerX + Math.cos(angle) * reach,
+      centerZ + Math.sin(angle) * reach,
+    )
+    for (const coord of hexLine(center, far)) {
+      const tile = tileMap.get(tileKey(coord.q, coord.r))
+      if (!tile) continue
+
+      const distance = hexDistance(coord, center)
+      // 分界线穿过河流时由河流本身充当屏障，只在此处架设关口
+      if (distance === GATE_RADIUS) {
+        tile.isWater = false
+        tile.isBank = false
+        tile.isWall = false
+        tile.isGate = true
+        tile.level = 1
+        tile.height = GATE_HEIGHT
+        continue
+      }
+      if (tile.isWater) continue
+
+      if (distance <= WALL_SEGMENT_RADIUS) {
+        tile.isWall = true
+        tile.isGate = false
+        tile.height = WALL_HEIGHT
+        continue
+      }
+
+      // 远离中心的一段由连续山脉封住
+      tile.isWall = false
+      tile.isGate = false
+      tile.isBank = false
+      tile.level = 5
+      tile.height = getTerrainLevel(5).height
+    }
+  }
+
+  // 关口两侧的邻格必须可通行，避免山脊或河滩把门堵死
+  for (const tile of tiles) {
+    if (!tile.isGate) continue
+    for (const offset of NEIGHBOR_OFFSETS) {
+      const neighbor = tileMap.get(tileKey(tile.q + offset.q, tile.r + offset.r))
+      if (!neighbor || neighbor.isWall || neighbor.isGate) continue
+      neighbor.isWater = false
+      neighbor.isBank = false
+      if (neighbor.level >= 4) {
+        neighbor.level = 1
+        neighbor.height = getTerrainLevel(1).height
+      }
+    }
+  }
+
+  const spawns: Coord[] = []
+  const radius = Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * SPAWN_RADIUS_RATIO
+
+  for (const angle of SPAWN_ANGLES) {
+    const seed = worldToAxial(centerX + Math.cos(angle) * radius, centerZ + Math.sin(angle) * radius)
+    const anchor = tileMap.get(tileKey(seed.q, seed.r)) ?? nearestTile(tiles, seed)
+    if (!anchor) continue
+
+    flattenPocket(tiles, anchor)
+    spawns.push({ q: anchor.q, r: anchor.r })
+  }
+
+  return spawns
 }
 
 function computeBounds(tiles: MapTile[]): MapBounds {
