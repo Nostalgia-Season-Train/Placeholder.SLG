@@ -30,7 +30,7 @@ export interface Coord {
   r: number
 }
 
-export type GeneralStatus = 'idle' | 'marching' | 'capturing' | 'garrison' | 'resting'
+export type GeneralStatus = 'idle' | 'marching' | 'capturing' | 'garrison' | 'resting' | 'fighting'
 
 export const STATUS_LABELS: Record<GeneralStatus, string> = {
   idle: '待命',
@@ -38,6 +38,7 @@ export const STATUS_LABELS: Record<GeneralStatus, string> = {
   capturing: '占领',
   garrison: '驻守',
   resting: '休整',
+  fighting: '交战',
 }
 
 export interface Personality {
@@ -72,8 +73,13 @@ export interface GeneralState {
   faction: Faction
   /** 角色属性中的职位；用于地图与聊天统一的显示名 */
   position: GeneralPosition
+  /** 角色属性中的定位；影响兵力与普攻强度 */
+  role: GeneralRole
   coord: Coord
   power: number
+  /** 当前兵力与兵力上限；兵力归零即战败撤退 */
+  hp: number
+  maxHp: number
   personality: Personality
   order: BotOrder | null
   target: Coord | null
@@ -82,6 +88,8 @@ export interface GeneralState {
   moveTicks: number
   /** 慢地形上还需原地等待的 Tick 数 */
   moveDelay: number
+  /** 主动撤退后的脱战保护 Tick 数，期间不会被拖入交战 */
+  retreatGrace: number
   captureProgress: number
   captureCost: number
   status: GeneralStatus

@@ -26,6 +26,7 @@ import {
   type Faction,
   type Coord,
   type GeneralState,
+  type GeneralRole,
   type Personality,
   type SimEvent,
   type SimSaveState,
@@ -51,6 +52,19 @@ export interface SimSignal {
 
 /** Stat grades mapped onto a 1..3 power scale */
 const GRADE_SCORE: Record<StatGrade, number> = { 低: 1, 中: 2, 高: 3 }
+
+/** 定位对兵力上限与普攻强度的缩放系数 */
+const ROLE_COMBAT: Record<GeneralRole, { hp: number; attack: number }> = {
+  武将: { hp: 1.15, attack: 1.15 },
+  术武将: { hp: 1.05, attack: 1.05 },
+  法师: { hp: 0.9, attack: 0.95 },
+  疗愈师: { hp: 0.85, attack: 0.8 },
+}
+
+/** 由战力换算兵力上限，再按定位缩放 */
+function maxHpOf(power: number, role: GeneralRole): number {
+  return Math.round((60 + power * 2) * ROLE_COMBAT[role].hp)
+}
 
 /** Personality tags adjust the bot's target-selection weights */
 const PERSONALITY_ADJUSTMENTS: Record<string, { aggression: number; caution: number }> = {
@@ -82,13 +96,19 @@ function personalityFromCard(text: string): Personality {
 }
 
 function cloneGeneral(general: GeneralState): GeneralState {
+  const role = general.role ?? '武将'
+  const maxHp = general.maxHp ?? maxHpOf(general.power, role)
   return {
     ...general,
     // 旧存档没有职位字段，按「无」处理
     position: general.position ?? '无',
+    role,
+    maxHp,
+    hp: general.hp ?? maxHp,
     // 旧存档没有 Tick 字段，按未移动处理
     moveTicks: general.moveTicks ?? 0,
     moveDelay: general.moveDelay ?? 0,
+    retreatGrace: general.retreatGrace ?? 0,
     coord: { ...general.coord },
     personality: { ...general.personality },
     order: general.order
@@ -147,10 +167,36 @@ export class MarchSimulation {
     }
   }
 
-  /** Advance one round: every general acts in order */
+  /**
+   * Advance one tick. A tick is also one combat round:
+   * units within one tile of an enemy are locked and each lands one basic attack,
+   * the rest move, capture or rest.
+   */
   step(): void {
     this.round += 1
-    for (const general of this.generals) this.act(general)
+
+    for (const general of this.generals) {
+      if (general.retreatGrace > 0) general.retreatGrace -= 1
+    }
+
+    // 交战中收到撤退指令的单位优先脱离，脱离保护期内不会被再次拖入交战
+    const locked = new Set<string>()
+    for (const general of this.generals) {
+      if (general.order?.stance !== 'retreat' || !this.engaged(general)) continue
+      this.disengage(general)
+      locked.add(general.id)
+    }
+
+    const fighters = this.generals.filter((general) => this.engaged(general))
+    if (fighters.length > 0) {
+      this.fightRound(fighters)
+      for (const fighter of fighters) locked.add(fighter.id)
+    }
+
+    for (const general of this.generals) {
+      if (locked.has(general.id)) continue
+      this.act(general)
+    }
   }
 
   /** Assign an order to one bot; returns false when the bot does not belong to the simulation */
@@ -247,19 +293,26 @@ export class MarchSimulation {
       nearestCapturable(this.terrain, city.coord, taken)
     if (!spawn) return null
 
+    const power = 32 + GRADE_SCORE[card.attack] * 10 + GRADE_SCORE[card.magic] * 7
+    const maxHp = maxHpOf(power, card.role)
+
     const general: GeneralState = {
       id: `card-${card.id}`,
       name: card.name,
       faction: card.faction,
       position: card.position,
+      role: card.role,
       coord: { ...spawn },
-      power: 32 + GRADE_SCORE[card.attack] * 10 + GRADE_SCORE[card.magic] * 7,
+      power,
+      hp: maxHp,
+      maxHp,
       personality: personalityFromCard(card.personality),
       order: null,
       target: null,
       path: [],
       moveTicks: 0,
       moveDelay: 0,
+      retreatGrace: 0,
       captureProgress: 0,
       captureCost: 2,
       status: 'idle',
@@ -296,6 +349,8 @@ export class MarchSimulation {
     if (general.restTurns > 0) {
       general.restTurns -= 1
       general.status = 'resting'
+      // 休整只恢复部分兵力，撤退后不会直接回满
+      general.hp = Math.min(general.maxHp, general.hp + Math.ceil(general.maxHp * 0.15))
       return
     }
 
@@ -342,12 +397,6 @@ export class MarchSimulation {
     general.moveDelay = general.moveTicks - 1
     general.marchDistance += general.moveTicks
 
-    const enemy = this.enemyOnTile(general)
-    if (enemy) {
-      this.resolveEncounter(general, enemy)
-      return
-    }
-
     if (coordKey(general.coord) === coordKey(general.target)) {
       this.captureTile(general)
     }
@@ -376,6 +425,8 @@ export class MarchSimulation {
 
   private captureTile(general: GeneralState): void {
     if (!general.target) return
+    // 地块上有敌军时不能占领，需先分出胜负
+    if (this.enemyOnTile(general)) return
 
     const key = coordKey(general.coord)
     const tile = getTile(this.terrain, general.coord)
@@ -464,8 +515,110 @@ export class MarchSimulation {
   }
 
   /* ------------------------------------------------------------------ */
-  /* Encounters                                                          */
+  /* Combat                                                              */
   /* ------------------------------------------------------------------ */
+
+  /** 同格或 6 个周边地块的敌对单位即进入交战状态；休整与脱战保护期内除外 */
+  private engaged(general: GeneralState): boolean {
+    if (general.restTurns > 0 || general.retreatGrace > 0) return false
+    return this.generals.some(
+      (other) =>
+        other !== general &&
+        other.faction !== general.faction &&
+        other.restTurns === 0 &&
+        hexDistance(other.coord, general.coord) <= 1,
+    )
+  }
+
+  /**
+   * 一个 Tick 即一个战斗回合：交战双方各进行一次普攻，伤害同时结算。
+   * 随机数按 this.generals 的固定顺序消费，保证推演确定性。
+   */
+  private fightRound(fighters: GeneralState[]): void {
+    const incoming = new Map<string, number>()
+
+    for (const fighter of fighters) {
+      const target = this.chooseCombatTarget(fighter, fighters)
+      if (!target) continue
+      const damage = this.basicDamage(fighter)
+      incoming.set(target.id, (incoming.get(target.id) ?? 0) + damage)
+    }
+
+    for (const [id, damage] of incoming) {
+      const target = this.generals.find((general) => general.id === id)
+      if (!target) continue
+      target.hp = Math.max(0, target.hp - damage)
+      if (target.hp > 0) continue
+      this.defeat(target)
+    }
+
+    for (const fighter of fighters) {
+      if (fighter.status === 'fighting') continue
+      fighter.status = 'fighting'
+      this.signal('encounter', fighter.faction, fighter.id, '遭遇战', `${fighter.name}进入交战`)
+    }
+  }
+
+  /** 同格敌人优先，其次是相邻敌人；同等条件下优先攻击兵力最少者 */
+  private chooseCombatTarget(fighter: GeneralState, fighters: GeneralState[]): GeneralState | null {
+    const enemies = fighters.filter(
+      (other) => other !== fighter && other.faction !== fighter.faction,
+    )
+    if (enemies.length === 0) return null
+
+    const sameTile = enemies.filter((other) => coordKey(other.coord) === coordKey(fighter.coord))
+    const pool = sameTile.length > 0 ? sameTile : enemies
+
+    let best: GeneralState = pool[0]!
+    for (const enemy of pool) {
+      if (enemy.hp < best.hp || (enemy.hp === best.hp && enemy.id < best.id)) best = enemy
+    }
+    return best
+  }
+
+  /** 单次普攻伤害：战力换算后按定位缩放，附带 ±10% 浮动 */
+  private basicDamage(general: GeneralState): number {
+    const base = (6 + general.power * 0.28) * ROLE_COMBAT[general.role].attack
+    return Math.max(1, Math.round(base * (0.9 + this.random() * 0.2)))
+  }
+
+  /** 兵力归零：撤退到相邻空格并休整，兵力不回满 */
+  private defeat(loser: GeneralState): void {
+    const retreat = this.retreatTile(loser)
+    if (retreat) loser.coord = retreat
+    loser.hp = Math.max(1, loser.hp)
+    loser.target = null
+    loser.path = []
+    loser.captureProgress = 0
+    loser.moveDelay = 0
+    loser.moveTicks = 0
+    loser.retreatGrace = 0
+    loser.restTurns = 2
+    loser.status = 'resting'
+    loser.order = null
+
+    this.log(loser.faction, `${loser.name}兵力耗尽，被迫后撤休整`)
+    this.signal('defeat', loser.faction, loser.id, '交战失利', `${loser.name}兵力耗尽，被迫后撤`)
+  }
+
+  /** 主动撤退：向远离敌军的方向退一格，并获得 2 Tick 脱战保护 */
+  private disengage(general: GeneralState): void {
+    const retreat = this.retreatTile(general)
+    if (retreat) {
+      general.coord = retreat
+      const tile = getTile(this.terrain, retreat)
+      general.moveTicks = Math.max(1, Math.round(tile?.moveCost ?? 1))
+      general.marchDistance += general.moveTicks
+    }
+
+    general.target = null
+    general.path = []
+    general.captureProgress = 0
+    general.moveDelay = 0
+    general.retreatGrace = 2
+    general.status = 'marching'
+    this.log(general.faction, `${general.name}主动脱离交战`)
+  }
 
   private enemyOnTile(general: GeneralState): GeneralState | undefined {
     return this.generals.find(
@@ -476,61 +629,28 @@ export class MarchSimulation {
     )
   }
 
-  private resolveEncounter(attacker: GeneralState, defender: GeneralState): void {
-    const attackRoll = attacker.power * (0.82 + this.random() * 0.36)
-    const defendRoll = defender.power * (0.82 + this.random() * 0.36)
-    const winner = attackRoll >= defendRoll ? attacker : defender
-    const loser = winner === attacker ? defender : attacker
-
-    const retreat = this.retreatTile(loser)
-    if (retreat) loser.coord = retreat
-    loser.target = null
-    loser.path = []
-    loser.captureProgress = 0
-    loser.moveDelay = 0
-    loser.moveTicks = 0
-    loser.restTurns = 2
-    loser.status = 'resting'
-    loser.order = null
-
-    const key = coordKey(winner.coord)
-    winner.target = null
-    winner.path = []
-    winner.captureProgress = 0
-    winner.status = 'garrison'
-
-    if (this.occupation.get(key) !== winner.faction) {
-      this.occupation.set(key, winner.faction)
-      this.occupationVersion += 1
-    }
-
-    this.log(
-      winner.faction,
-      `${winner.name}击退${loser.name}，夺取${getTile(this.terrain, winner.coord)?.name ?? '地块'}`,
-    )
-    this.signal('encounter', winner.faction, winner.id, '遭遇战', `${winner.name}击退${loser.name}`)
-    this.signal('defeat', loser.faction, loser.id, '遭遇战失利', `${loser.name}被${winner.name}击退，转入休整`)
-  }
-
+  /** 撤退落点：在可通行的相邻地块中，选离最近敌军最远的一块 */
   private retreatTile(loser: GeneralState): Coord | null {
     let best: Coord | null = null
-    let bestDistance = Infinity
+    let bestDistance = -Infinity
 
     for (const neighbor of neighbors(loser.coord)) {
       const tile = getTile(this.terrain, neighbor)
       if (!tile?.passable) continue
 
-      const hasEnemy = this.generals.some(
-        (other) =>
-          other !== loser &&
-          other.faction !== loser.faction &&
-          coordKey(other.coord) === coordKey(neighbor),
-      )
-      if (hasEnemy) continue
+      let nearestEnemy = Infinity
+      for (const other of this.generals) {
+        if (other === loser || other.faction === loser.faction) continue
+        if (coordKey(other.coord) === coordKey(neighbor)) {
+          nearestEnemy = -Infinity
+          break
+        }
+        nearestEnemy = Math.min(nearestEnemy, hexDistance(other.coord, neighbor))
+      }
 
-      const distance = hexDistance(neighbor, loser.coord)
-      if (distance < bestDistance) {
-        bestDistance = distance
+      if (nearestEnemy === -Infinity) continue
+      if (nearestEnemy > bestDistance) {
+        bestDistance = nearestEnemy
         best = neighbor
       }
     }

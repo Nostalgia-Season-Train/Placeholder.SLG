@@ -115,7 +115,7 @@ function speechLine(speech: { round: number; channel: ChatChannel; text: string 
 }
 
 function unitLine(general: GeneralState): string {
-  return `${general.id} ${general.name} (${general.coord.q},${general.coord.r}) ${general.status} 战力${general.power}`
+  return `${general.id} ${general.name} (${general.coord.q},${general.coord.r}) ${general.status} 战力${general.power} 兵力${general.hp}/${general.maxHp}`
 }
 
 /** 频道最近消息，剔除本轮触发的那句，避免与触发内容重复 */
@@ -179,7 +179,7 @@ function nearbyEnemies(faction: Faction, snapshot: SimSnapshot): unknown[] {
     .slice(0, ENEMY_LIMIT)
     .map(
       (entry) =>
-        `${entry.general.name}(${FACTION_NAMES[entry.general.faction]}) (${entry.general.coord.q},${entry.general.coord.r}) ${entry.general.status} 战力${entry.general.power}`,
+        `${entry.general.name}(${FACTION_NAMES[entry.general.faction]}) (${entry.general.coord.q},${entry.general.coord.r}) ${entry.general.status} 战力${entry.general.power} 兵力${entry.general.hp}/${entry.general.maxHp}`,
     )
 }
 

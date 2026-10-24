@@ -15,6 +15,20 @@ import { hexCornerPoints } from '@shared/map/hex'
 /** 名称标签高度（世界单位） */
 const LABEL_HEIGHT = 0.3
 
+/** 名称文字的像素高度，用于保持字体大小不随兵力条加高而缩小 */
+const LABEL_TEXT_PX = 56
+
+/** 兵力条与名称之间的间距、兵力条本身的高度（像素） */
+const BAR_GAP_PX = 8
+const BAR_HEIGHT_PX = 16
+
+/** 交战标记（交叉双剑）的贴图边长与世界高度 */
+const FIGHT_MARK_PX = 96
+const FIGHT_MARK_HEIGHT = 0.38
+
+/** 交战标记在棋子头上的高度 */
+const FIGHT_MARK_Y = 1.35
+
 /** 默认一个 Tick 的时长（毫秒），实际值由后端状态驱动 */
 const DEFAULT_TICK_MS = 650
 
@@ -52,6 +66,11 @@ interface AgentToken {
   labelTexture: THREE.CanvasTexture
   labelText: string
   labelColor: number
+  /** 已绘制的兵力比，用于避免每帧重绘贴图 */
+  labelHpRatio: number
+  /** 交战标记（交叉双剑），交战中才显示 */
+  fightMark: THREE.Sprite
+  fightTexture: THREE.CanvasTexture
   tileKey: string
   baseY: number
   phase: number
@@ -141,6 +160,12 @@ export class AgentLayer {
       if (token.targetRing.visible) {
         token.targetRing.scale.setScalar(1 + Math.sin(this.elapsed * 3 + token.phase) * 0.08)
       }
+
+      if (token.fightMark.visible) {
+        const scale = FIGHT_MARK_HEIGHT * (1 + Math.sin(this.elapsed * 6 + token.phase) * 0.08)
+        token.fightMark.scale.set(scale, scale, 1)
+        token.fightMark.position.y = FIGHT_MARK_Y + Math.sin(this.elapsed * 4 + token.phase) * 0.04
+      }
     }
   }
 
@@ -190,7 +215,7 @@ export class AgentLayer {
     const label = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthWrite: false }),
     )
-    label.position.y = 0.86
+    label.position.y = 0.9
     label.renderOrder = 7
 
     root.add(base, body, bead, label)
@@ -216,7 +241,19 @@ export class AgentLayer {
     targetRing.visible = false
     targetRing.renderOrder = 4
 
-    this.group.add(root, pathLine, targetRing)
+    // 交战标记：头上交叉双剑，只在交战时显示
+    const fightCanvas = document.createElement('canvas')
+    drawFightMark(fightCanvas)
+    const fightTexture = new THREE.CanvasTexture(fightCanvas)
+    fightTexture.colorSpace = THREE.SRGBColorSpace
+    const fightMark = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: fightTexture, transparent: true, depthWrite: false }),
+    )
+    fightMark.scale.set(FIGHT_MARK_HEIGHT, FIGHT_MARK_HEIGHT, 1)
+    fightMark.visible = false
+    fightMark.renderOrder = 8
+
+    this.group.add(root, pathLine, targetRing, fightMark)
 
     const token: AgentToken = {
       root,
@@ -230,6 +267,9 @@ export class AgentLayer {
       labelTexture,
       labelText: '',
       labelColor: -1,
+      labelHpRatio: -1,
+      fightMark,
+      fightTexture,
       tileKey: `${general.coord.q},${general.coord.r}`,
       baseY: position.y + 0.05,
       phase: this.tokens.size * 1.7,
@@ -281,10 +321,17 @@ export class AgentLayer {
     } else {
       token.targetRing.visible = false
     }
+
+    if (general.status === 'fighting') {
+      token.fightMark.position.set(position.x, position.y + FIGHT_MARK_Y, position.z)
+      token.fightMark.visible = true
+    } else {
+      token.fightMark.visible = false
+    }
   }
 
   private destroyToken(token: AgentToken): void {
-    this.group.remove(token.root, token.pathLine, token.targetRing)
+    this.group.remove(token.root, token.pathLine, token.targetRing, token.fightMark)
 
     token.root.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -297,6 +344,8 @@ export class AgentLayer {
     ;(token.pathLine.material as THREE.Material).dispose()
     token.targetRing.geometry.dispose()
     ;(token.targetRing.material as THREE.Material).dispose()
+    token.fightTexture.dispose()
+    ;(token.fightMark.material as THREE.Material).dispose()
     token.labelTexture.dispose()
     ;(token.label.material as THREE.Material).dispose()
   }
@@ -385,14 +434,19 @@ export class AgentLayer {
     token.ringMaterial.color.setHex(style.fill)
   }
 
-  /** 头顶名称与世界频道作者名同格式、同配色 */
+  /** 头顶名称与世界频道作者名同格式、同配色；下方附兵力条 */
   private refreshLabel(token: AgentToken, general: GeneralState): void {
     const text = formatUnitName(general.faction, general.position ?? '无', general.name)
     const color = this.styleFor(general.faction).fill
-    if (text === token.labelText && color === token.labelColor) return
+    const maxHp = general.maxHp ?? 0
+    const ratio = maxHp > 0 ? Math.round(((general.hp ?? maxHp) / maxHp) * 100) / 100 : 1
+    if (text === token.labelText && color === token.labelColor && ratio === token.labelHpRatio) {
+      return
+    }
     token.labelText = text
     token.labelColor = color
-    drawLabelSprite(token.labelCanvas, token.labelTexture, token.label, text, color)
+    token.labelHpRatio = ratio
+    drawLabelSprite(token.labelCanvas, token.labelTexture, token.label, text, color, ratio)
   }
 
   private destroyOccupationMeshes(): void {
@@ -430,20 +484,21 @@ function hexRingShape(outerRadius: number, innerRadius: number): THREE.Shape {
   return shape
 }
 
-/** 把名称绘成 Canvas 贴图；正交相机下 Sprite 始终面向镜头 */
+/** 把名称与兵力条绘成 Canvas 贴图；正交相机下 Sprite 始终面向镜头 */
 function drawLabelSprite(
   canvas: HTMLCanvasElement,
   texture: THREE.CanvasTexture,
   sprite: THREE.Sprite,
   text: string,
   color: number,
+  hpRatio: number,
 ): void {
   const font = 'bold 40px "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif'
   const probe = canvas.getContext('2d')
   if (!probe) return
   probe.font = font
   const width = Math.ceil(probe.measureText(text).width) + 28
-  const height = 56
+  const height = LABEL_TEXT_PX + BAR_GAP_PX + BAR_HEIGHT_PX
 
   canvas.width = width
   canvas.height = height
@@ -456,10 +511,83 @@ function drawLabelSprite(
   ctx.lineJoin = 'round'
   ctx.lineWidth = 6
   ctx.strokeStyle = 'rgba(4, 8, 12, 0.85)'
-  ctx.strokeText(text, width / 2, height / 2)
+  ctx.strokeText(text, width / 2, LABEL_TEXT_PX / 2)
   ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`
-  ctx.fillText(text, width / 2, height / 2)
+  ctx.fillText(text, width / 2, LABEL_TEXT_PX / 2)
+
+  // 兵力条：深色底 + 按比例填充，低于三成转为红色
+  const barWidth = width - 24
+  const barX = 12
+  const barY = LABEL_TEXT_PX + BAR_GAP_PX / 2
+  const ratio = Math.min(1, Math.max(0, hpRatio))
+
+  ctx.fillStyle = 'rgba(6, 12, 16, 0.82)'
+  ctx.fillRect(barX, barY, barWidth, BAR_HEIGHT_PX)
+  ctx.fillStyle = hpColor(ratio)
+  ctx.fillRect(barX + 1, barY + 1, Math.max(1, (barWidth - 2) * ratio), BAR_HEIGHT_PX - 2)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'
+  ctx.lineWidth = 2
+  ctx.strokeRect(barX, barY, barWidth, BAR_HEIGHT_PX)
 
   texture.needsUpdate = true
-  sprite.scale.set((LABEL_HEIGHT * width) / height, LABEL_HEIGHT, 1)
+  sprite.scale.set(
+    (LABEL_HEIGHT * width) / LABEL_TEXT_PX,
+    (LABEL_HEIGHT * height) / LABEL_TEXT_PX,
+    1,
+  )
+}
+
+function hpColor(ratio: number): string {
+  if (ratio < 0.3) return '#e04b3a'
+  if (ratio < 0.6) return '#e8b23a'
+  return '#5ad06a'
+}
+
+/** 交叉双剑贴图：两把剑左右交叉，带深色描边，保证在任意地形上都能辨识 */
+function drawFightMark(canvas: HTMLCanvasElement): void {
+  canvas.width = FIGHT_MARK_PX
+  canvas.height = FIGHT_MARK_PX
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.clearRect(0, 0, FIGHT_MARK_PX, FIGHT_MARK_PX)
+  ctx.translate(FIGHT_MARK_PX / 2, FIGHT_MARK_PX / 2)
+  ctx.scale(1.2, 1.2)
+  for (const angle of [-Math.PI / 4, Math.PI / 4]) {
+    ctx.save()
+    ctx.rotate(angle)
+    drawSword(ctx)
+    ctx.restore()
+  }
+}
+
+/** 单把剑：剑尖朝上，由上到下依次为剑身、护手、剑柄与剑首 */
+function drawSword(ctx: CanvasRenderingContext2D): void {
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(8, 14, 18, 0.9)'
+  ctx.fillStyle = '#f4ede0'
+
+  ctx.beginPath()
+  ctx.moveTo(0, -34)
+  ctx.lineTo(5, 4)
+  ctx.lineTo(0, 8)
+  ctx.lineTo(-5, 4)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.rect(-11, 7, 22, 6)
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.rect(-3.5, 13, 7, 12)
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.arc(0, 27, 4.5, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.stroke()
 }
