@@ -208,7 +208,7 @@ function submit(): void {
                 {{ tag }}
               </span>
               <button type="button" class="personality-add" @click="pickerOpen = true">
-                ＋ 添加性格
+                修改性格
               </button>
             </div>
             <p class="field-note">{{ personalityNote }}</p>

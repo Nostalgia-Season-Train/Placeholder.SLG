@@ -11,10 +11,12 @@ import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
 import { closeCardStore } from './runtime/cardStore'
 import {
   DEFAULT_PERSONALITY,
+  DEFAULT_PERSONALITY_BY_AXIS,
   FACTIONS,
   GENERAL_POSITIONS,
   GENERAL_ROLES,
   GENERAL_TEAMS,
+  PERSONALITY_AXES,
   PERSONALITY_TAGS,
   personalityConflicts,
   STAT_GRADES,
@@ -140,7 +142,12 @@ function asPersonality(value: unknown): PersonalityTag[] {
     }
     picked.push(tag)
   }
-  return picked.length > 0 ? picked : [...DEFAULT_PERSONALITY]
+  // 缺失的维度补默认标签，保证每个角色两个维度都有取值
+  for (const group of PERSONALITY_AXES) {
+    if (picked.some((tag) => group.tags.includes(tag))) continue
+    picked.push(DEFAULT_PERSONALITY_BY_AXIS[group.axis])
+  }
+  return picked
 }
 
 /** Body of POST /api/cards and PATCH /api/cards/:id */

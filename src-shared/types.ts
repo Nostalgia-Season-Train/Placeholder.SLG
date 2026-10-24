@@ -225,7 +225,15 @@ export type PersonalityTag =
 /** 扁平化的全部标签，顺序与 PERSONALITY_AXES 一致 */
 export const PERSONALITY_TAGS: PersonalityTag[] = PERSONALITY_AXES.flatMap((item) => item.tags)
 
-export const DEFAULT_PERSONALITY: PersonalityTag[] = ['稳健', '拓土']
+/** 每个维度的默认标签，保证初始性格两个维度都有取值 */
+export const DEFAULT_PERSONALITY_BY_AXIS: Record<PersonalityAxis, PersonalityTag> = {
+  胆略: '稳健',
+  用兵: '拓土',
+}
+
+export const DEFAULT_PERSONALITY: PersonalityTag[] = PERSONALITY_AXES.map(
+  (item) => DEFAULT_PERSONALITY_BY_AXIS[item.axis],
+)
 
 export interface PersonalityTrait {
   /** 对侵略性的加成，越高越愿意深入敌境 */
@@ -277,7 +285,7 @@ export function personalityOf(tags: PersonalityTag[]): Personality {
   }
 }
 
-/** 旧版自由文本或旧数组的兼容归并，保证每个维度只留一个标签 */
+/** 旧版自由文本或旧数组的兼容归并，保证每个维度恰好一个标签 */
 export function normalizePersonality(value: string | string[] | null | undefined): PersonalityTag[] {
   const raw = Array.isArray(value) ? value : (value ?? '').split(/[、，,／/\s]+/)
   const picked: PersonalityTag[] = []
@@ -290,7 +298,12 @@ export function normalizePersonality(value: string | string[] | null | undefined
     if (picked.some((existing) => personalityConflicts(existing, tag))) continue
     picked.push(tag)
   }
-  return picked.length > 0 ? picked : [...DEFAULT_PERSONALITY]
+  // 缺失的维度补默认标签，旧档只有一个维度时也能得到完整组合
+  for (const group of PERSONALITY_AXES) {
+    if (picked.some((tag) => group.tags.includes(tag))) continue
+    picked.push(DEFAULT_PERSONALITY_BY_AXIS[group.axis])
+  }
+  return picked
 }
 
 /** 单个词的识别：先精确匹配，再按关键词归类 */

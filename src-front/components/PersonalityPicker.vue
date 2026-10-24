@@ -25,12 +25,8 @@ watch(
   },
 )
 
-/** 选中即替换同维度标签，再点一次取消 */
-function toggle(tag: PersonalityTag): void {
-  if (draft.value.includes(tag)) {
-    draft.value = draft.value.filter((item) => item !== tag)
-    return
-  }
+/** 每个维度必选一个：点同维度其他标签即替换，点击已选标签保持不变 */
+function select(tag: PersonalityTag): void {
   draft.value = [...draft.value.filter((item) => !personalityConflicts(item, tag)), tag]
 }
 
@@ -57,23 +53,19 @@ const summary = computed(() => personalitySummary(draft.value))
               :key="tag"
               type="button"
               :class="['tag-btn', { active: draft.includes(tag) }]"
-              @click="toggle(tag)"
+              @click="select(tag)"
             >
               {{ tag }}
             </button>
           </div>
         </div>
 
-        <p class="picker-note">
-          {{ draft.length > 0 ? summary.behavior : '至少选择一个标签' }}
-        </p>
+        <p class="picker-note">{{ summary.behavior }}</p>
       </div>
 
       <footer class="picker-actions">
         <button type="button" class="ghost" @click="emit('close')">取消</button>
-        <button type="button" :disabled="draft.length === 0" @click="emit('confirm', draft)">
-          完成
-        </button>
+        <button type="button" @click="emit('confirm', draft)">完成</button>
       </footer>
     </section>
   </div>
