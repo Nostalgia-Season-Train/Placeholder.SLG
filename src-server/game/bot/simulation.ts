@@ -86,6 +86,9 @@ function cloneGeneral(general: GeneralState): GeneralState {
     ...general,
     // 旧存档没有职位字段，按「无」处理
     position: general.position ?? '无',
+    // 旧存档没有 Tick 字段，按未移动处理
+    moveTicks: general.moveTicks ?? 0,
+    moveDelay: general.moveDelay ?? 0,
     coord: { ...general.coord },
     personality: { ...general.personality },
     order: general.order
@@ -250,13 +253,13 @@ export class MarchSimulation {
       faction: card.faction,
       position: card.position,
       coord: { ...spawn },
-      speed: 0.6 + this.random() * 0.4,
       power: 32 + GRADE_SCORE[card.attack] * 10 + GRADE_SCORE[card.magic] * 7,
       personality: personalityFromCard(card.personality),
       order: null,
       target: null,
       path: [],
-      actionPoints: 0,
+      moveTicks: 0,
+      moveDelay: 0,
       captureProgress: 0,
       captureCost: 2,
       status: 'idle',
@@ -320,30 +323,33 @@ export class MarchSimulation {
       return
     }
 
-    general.actionPoints = Math.min(2, general.actionPoints + general.speed)
     general.status = 'marching'
 
-    while (general.path.length > 0) {
-      const next = general.path[0]!
-      const tile = getTile(this.terrain, next)
-      if (!tile) break
-      if (general.actionPoints + 1e-6 < tile.moveCost) break
+    // 慢地形（丘陵、河滩、关口）占 2 个 Tick：进入后原地等待一格
+    if (general.moveDelay > 0) {
+      general.moveDelay -= 1
+      return
+    }
 
-      general.actionPoints -= tile.moveCost
-      general.marchDistance += tile.moveCost
-      general.path.shift()
-      general.coord = { ...next }
+    const next = general.path[0]
+    if (!next) return
+    const tile = getTile(this.terrain, next)
+    if (!tile) return
 
-      const enemy = this.enemyOnTile(general)
-      if (enemy) {
-        this.resolveEncounter(general, enemy)
-        return
-      }
+    general.path.shift()
+    general.coord = { ...next }
+    general.moveTicks = Math.max(1, Math.round(tile.moveCost))
+    general.moveDelay = general.moveTicks - 1
+    general.marchDistance += general.moveTicks
 
-      if (coordKey(general.coord) === coordKey(general.target)) {
-        this.captureTile(general)
-        return
-      }
+    const enemy = this.enemyOnTile(general)
+    if (enemy) {
+      this.resolveEncounter(general, enemy)
+      return
+    }
+
+    if (coordKey(general.coord) === coordKey(general.target)) {
+      this.captureTile(general)
     }
   }
 
@@ -362,20 +368,10 @@ export class MarchSimulation {
     general.path = choice.path
     general.captureProgress = 0
     general.captureCost = Math.max(2, (tile?.level ?? 0) + 1)
-    this.primeMarch(general)
     this.log(
       general.faction,
       `${general.name}前往${tile?.name ?? '地块'}（${choice.target.q},${choice.target.r}）`,
     )
-  }
-
-  /** Start moving in the same round once a new direction has been chosen */
-  private primeMarch(general: GeneralState): void {
-    const next = general.path[0]
-    if (!next) return
-    const tile = getTile(this.terrain, next)
-    if (!tile) return
-    general.actionPoints = Math.max(general.actionPoints, tile.moveCost)
   }
 
   private captureTile(general: GeneralState): void {
@@ -464,7 +460,6 @@ export class MarchSimulation {
       general.path = result.path
       general.captureProgress = 0
       general.captureCost = Math.max(2, tile.level + 1)
-      this.primeMarch(general)
     }
   }
 
@@ -492,6 +487,8 @@ export class MarchSimulation {
     loser.target = null
     loser.path = []
     loser.captureProgress = 0
+    loser.moveDelay = 0
+    loser.moveTicks = 0
     loser.restTurns = 2
     loser.status = 'resting'
     loser.order = null

@@ -10,13 +10,16 @@ import {
   type Diplomacy,
   type RelationStyle,
 } from '../bot/diplomacy'
-import { HEX_WIDTH, hexCornerPoints } from '@shared/map/hex'
-
-/** World units walked per second; one hex takes roughly 0.55s */
-const WALK_SPEED = HEX_WIDTH / 0.55
+import { hexCornerPoints } from '@shared/map/hex'
 
 /** 名称标签高度（世界单位） */
 const LABEL_HEIGHT = 0.3
+
+/** 默认一个 Tick 的时长（毫秒），实际值由后端状态驱动 */
+const DEFAULT_TICK_MS = 650
+
+/** 移动动画占用的 Tick 比例：走完即停，排队等下个 Tick */
+const MOVE_ANIMATION_RATIO = 0.7
 
 export interface WorldPosition {
   x: number
@@ -24,11 +27,22 @@ export interface WorldPosition {
   y: number
 }
 
+/** 单个地块的短距离移动动画，结束后棋子停在原地 */
+interface MoveTween {
+  fromX: number
+  fromY: number
+  fromZ: number
+  toX: number
+  toY: number
+  toZ: number
+  elapsed: number
+  duration: number
+}
+
 interface AgentToken {
   root: THREE.Group
   pathLine: THREE.Line
   targetRing: THREE.Mesh
-  targetPosition: THREE.Vector3
   bodyMaterial: THREE.MeshStandardMaterial
   lineMaterial: THREE.LineBasicMaterial
   ringMaterial: THREE.MeshBasicMaterial
@@ -38,12 +52,11 @@ interface AgentToken {
   labelTexture: THREE.CanvasTexture
   labelText: string
   labelColor: number
-  /** Tile centers still to be walked through, in order */
-  waypoints: THREE.Vector3[]
   tileKey: string
-  walkSpeed: number
   baseY: number
   phase: number
+  /** 当前这一格的动画；同一时间只允许存在一段 */
+  move: MoveTween | null
 }
 
 export class AgentLayer {
@@ -55,12 +68,15 @@ export class AgentLayer {
   private occupation: Map<string, Faction> | null = null
   private diplomacy: Diplomacy | null = null
   private elapsed = 0
+  /** 一个 Tick 的时长（秒），由后端推演节拍驱动 */
+  private tickSeconds = DEFAULT_TICK_MS / 1000
 
   constructor(toWorld: (q: number, r: number) => WorldPosition) {
     this.toWorld = toWorld
   }
 
-  setAgents(generals: GeneralState[], diplomacy?: Diplomacy): void {
+  setAgents(generals: GeneralState[], diplomacy?: Diplomacy, tickMs?: number): void {
+    if (tickMs && Number.isFinite(tickMs)) this.tickSeconds = Math.max(0.1, tickMs / 1000)
     if (diplomacy && this.diplomacy?.playerFaction !== diplomacy.playerFaction) {
       this.diplomacy = diplomacy
       this.rebuildOccupation()
@@ -100,32 +116,25 @@ export class AgentLayer {
 
   update(dt: number): void {
     this.elapsed += dt
-    const step = Math.min(dt, 0.25)
-    const heightFactor = Math.min(1, dt * 8)
 
     for (const token of this.tokens.values()) {
-      // Walk the queued tile centers at a constant speed instead of easing between snapshots
-      let budget = token.walkSpeed * step
-      while (budget > 0 && token.waypoints.length > 0) {
-        const next = token.waypoints[0]!
-        const dx = next.x - token.root.position.x
-        const dz = next.z - token.root.position.z
-        const distance = Math.hypot(dx, dz)
+      // 每次只推进当前这一格的动画：走完就停住，等下个 Tick 再走下一格
+      const move = token.move
+      if (move) {
+        move.elapsed += dt
+        const t = Math.min(1, move.elapsed / move.duration)
+        token.root.position.x = THREE.MathUtils.lerp(move.fromX, move.toX, t)
+        token.root.position.z = THREE.MathUtils.lerp(move.fromZ, move.toZ, t)
+        token.baseY = THREE.MathUtils.lerp(move.fromY, move.toY, t)
 
-        if (distance <= budget || distance < 1e-4) {
-          token.root.position.x = next.x
-          token.root.position.z = next.z
-          token.waypoints.shift()
-          budget -= distance
-        } else {
-          token.root.position.x += (dx / distance) * budget
-          token.root.position.z += (dz / distance) * budget
-          budget = 0
+        if (t >= 1) {
+          token.root.position.x = move.toX
+          token.root.position.z = move.toZ
+          token.baseY = move.toY
+          token.move = null
         }
       }
 
-      const targetY = token.waypoints.length > 0 ? token.waypoints[0]!.y : token.targetPosition.y
-      token.baseY = THREE.MathUtils.lerp(token.baseY, targetY, heightFactor)
       token.root.position.y =
         token.baseY + Math.sin(this.elapsed * 2.4 + token.phase) * 0.03
 
@@ -213,7 +222,6 @@ export class AgentLayer {
       root,
       pathLine,
       targetRing,
-      targetPosition: root.position.clone(),
       bodyMaterial,
       lineMaterial,
       ringMaterial,
@@ -222,11 +230,10 @@ export class AgentLayer {
       labelTexture,
       labelText: '',
       labelColor: -1,
-      waypoints: [],
       tileKey: `${general.coord.q},${general.coord.r}`,
-      walkSpeed: WALK_SPEED,
       baseY: position.y + 0.05,
       phase: this.tokens.size * 1.7,
+      move: null,
     }
     this.refreshLabel(token, general)
     return token
@@ -235,15 +242,21 @@ export class AgentLayer {
   private updateToken(token: AgentToken, general: GeneralState): void {
     this.refreshLabel(token, general)
     const position = this.toWorld(general.coord.q, general.coord.r)
-    token.targetPosition.set(position.x, position.y + 0.05, position.z)
 
-    // Queue the new tile center so the token walks there instead of snapping
     const tileKey = `${general.coord.q},${general.coord.r}`
     if (tileKey !== token.tileKey) {
       token.tileKey = tileKey
-      token.waypoints.push(token.targetPosition.clone())
-      // Drop stale waypoints when the simulation outruns the animation
-      if (token.waypoints.length > 4) token.waypoints.splice(0, token.waypoints.length - 4)
+      // 一格一段线性动画：时长小于一个 Tick，播完停住等下个 Tick
+      token.move = {
+        fromX: token.root.position.x,
+        fromY: token.baseY,
+        fromZ: token.root.position.z,
+        toX: position.x,
+        toY: position.y + 0.05,
+        toZ: position.z,
+        elapsed: 0,
+        duration: Math.max(0.06, this.tickSeconds * MOVE_ANIMATION_RATIO),
+      }
     }
 
     const points: THREE.Vector3[] = [new THREE.Vector3(position.x, position.y + 0.32, position.z)]

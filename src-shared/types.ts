@@ -73,13 +73,15 @@ export interface GeneralState {
   /** 角色属性中的职位；用于地图与聊天统一的显示名 */
   position: GeneralPosition
   coord: Coord
-  speed: number
   power: number
   personality: Personality
   order: BotOrder | null
   target: Coord | null
   path: Coord[]
-  actionPoints: number
+  /** 当前所处地块占用的 Tick 数：普通地块 1，丘陵与河滩 2 */
+  moveTicks: number
+  /** 慢地形上还需原地等待的 Tick 数 */
+  moveDelay: number
   captureProgress: number
   captureCost: number
   status: GeneralStatus

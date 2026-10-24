@@ -211,7 +211,7 @@ function renderScene(): void {
   if (!view || !snap) return
 
   const policy = diplomacy.value
-  view.setAgents(snap.generals, policy)
+  view.setAgents(snap.generals, policy, speed.value)
   view.setCities(snap.cities, policy)
 
   if (snap.occupationVersion !== lastOccupationVersion) {

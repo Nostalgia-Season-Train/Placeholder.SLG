@@ -51,8 +51,11 @@ export function hexDistance(a: Coord, b: Coord): number {
   return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2
 }
 
-/** Base movement cost per terrain level; mountains and high mountains are impassable */
-const BASE_MOVE_COST = [1, 1, 1.25, 1.6, Infinity, Infinity]
+/**
+ * 每个地块占用的 Tick 数。移动按 Tick 一格推进，因此代价必须是整数：
+ * 普通地形 1，丘陵与河滩 2，山地与高山不可通行。
+ */
+const BASE_MOVE_COST = [1, 1, 1, 2, Infinity, Infinity]
 
 export function buildTerrain(map: MapData): WorldTerrain {
   const tiles = new Map<string, TileInfo>()
@@ -60,14 +63,12 @@ export function buildTerrain(map: MapData): WorldTerrain {
   let maxLevel = 0
 
   for (const tile of map.tiles) {
-    const onRoad = tile.isRoad
     const base = BASE_MOVE_COST[Math.max(0, Math.min(5, tile.level))] ?? 1
-    let moveCost = base
-    if (tile.isBank && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.9)
-    if (onRoad && Number.isFinite(moveCost)) moveCost = Math.max(0.62, moveCost * 0.6)
-    // 关口是城墙上的唯一通道，保持较高的通行成本
-    if (tile.isGate && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.4)
+    // 河滩与丘陵同为慢地形：占 2 个 Tick；关口作为唯一通道同样需要 2 个 Tick
+    let moveCost = tile.isBank ? 2 : base
+    if (tile.isGate && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 2)
 
+    const onRoad = tile.isRoad
     const passable = !tile.isWater && !tile.isWall && Number.isFinite(moveCost)
     const value = passable
       ? tile.isGate

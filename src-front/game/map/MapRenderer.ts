@@ -173,8 +173,8 @@ export class MapRenderer {
   }
 
   /** Sync general positions, paths and targets */
-  setAgents(generals: GeneralState[], diplomacy?: Diplomacy): void {
-    this.agentLayer?.setAgents(generals, diplomacy)
+  setAgents(generals: GeneralState[], diplomacy?: Diplomacy, tickMs?: number): void {
+    this.agentLayer?.setAgents(generals, diplomacy, tickMs)
   }
 
   /** Sync faction home cities */
