@@ -610,10 +610,21 @@ export class GameRuntime {
     const snapshot = this.sim.snapshot()
     this.sendTick(snapshot)
     this.dispatchSignals()
+    this.flushReports()
     this.gate.broadcast(snapshot.round)
     if (snapshot.round % AUTOSAVE_INTERVAL === 0) {
       writeAutoSave(this.captureSave(AUTO_SAVE_LABEL))
     }
+  }
+
+  /** 兵线战报以系统消息落到世界频道，其他同盟频道玩家不可见 */
+  private flushReports(): void {
+    const reports = this.sim.drainReports()
+    if (reports.length === 0) return
+    for (const report of reports) {
+      this.channelLog.pushSystem('world', null, report.text, report.round)
+    }
+    this.broadcastChat('world')
   }
 
   private applyOrders(orders: AgentOrderDraft[], round: number): number {
@@ -643,6 +654,7 @@ export class GameRuntime {
       snapshot: {
         round: snapshot.round,
         generals: snapshot.generals,
+        minions: snapshot.minions,
         cities: snapshot.cities,
         occupationVersion: snapshot.occupationVersion,
         events: snapshot.events,

@@ -190,6 +190,7 @@ function renderScene(): void {
   const policy = diplomacy.value
   view.setAgents(snap.generals, policy, speed.value)
   view.setCities(snap.cities, policy)
+  view.setMinions(snap.minions, policy, speed.value)
 
   if (snap.occupationVersion !== lastOccupationVersion) {
     lastOccupationVersion = snap.occupationVersion
@@ -500,7 +501,7 @@ onBeforeUnmount(() => {
             class="badge"
             :style="{
               background: hover.city
-                ? relationColorCss(hover.city.faction)
+                ? relationColorCss(hover.city.owner)
                 : hover.isGate
                   ? toCss(GATE_COLOR)
                   : hover.isWall
@@ -522,7 +523,11 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="hover.city">
             <dt>归属</dt>
-            <dd>{{ hover.city.factionName }}</dd>
+            <dd>{{ hover.city.ownerName }}</dd>
+          </div>
+          <div v-if="hover.city">
+            <dt>城防</dt>
+            <dd>{{ Math.round(hover.city.hp) }} / {{ hover.city.maxHp }}</dd>
           </div>
           <div v-else>
             <dt>地势</dt>

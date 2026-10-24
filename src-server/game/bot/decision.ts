@@ -25,6 +25,7 @@ export function chooseTarget(
   occupation: Map<string, Faction>,
   locked: Set<string>,
   random: () => number,
+  exclude: Set<string> = new Set(),
 ): TargetChoice | null {
   const personality = general.personality
   const weight = Math.max(
@@ -35,6 +36,7 @@ export function chooseTarget(
 
   for (const tile of terrain.capturable) {
     const key = coordKey(tile.coord)
+    if (exclude.has(key)) continue
     const owner = occupation.get(key)
     if (owner === general.faction) continue
 

@@ -18,6 +18,10 @@ export interface TileInfo {
   moveCost: number
   value: number
   passable: boolean
+  /** 道路瓦片，兵线只沿道路与关口推进 */
+  road: boolean
+  /** 关口，连接两个出生区，兵线可通过 */
+  gate: boolean
 }
 
 export interface WorldTerrain {
@@ -92,6 +96,8 @@ export function buildTerrain(map: MapData): WorldTerrain {
       moveCost,
       value,
       passable,
+      road: onRoad,
+      gate: tile.isGate,
     }
 
     tiles.set(coordKey(info.coord), info)

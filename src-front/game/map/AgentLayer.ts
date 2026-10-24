@@ -549,7 +549,7 @@ function drawLabelSprite(
   )
 }
 
-function hpColor(ratio: number): string {
+export function hpColor(ratio: number): string {
   if (ratio < 0.3) return '#e04b3a'
   if (ratio < 0.6) return '#e8b23a'
   return '#5ad06a'

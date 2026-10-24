@@ -145,16 +145,45 @@ export interface SimEvent {
   text: string
 }
 
-/** Home city of one faction; squads depart from its outskirts */
+/** Home city of one faction; owner changes when walls are broken */
 export interface BaseCity {
+  /** 建城同盟，只用于城名 */
   faction: Faction
+  /** 当前归属，决定出兵方与染色 */
+  owner: Faction
   coord: Coord
   name: string
+  /** 城防血量；归零即被攻破，归属改为攻方并回满 */
+  hp: number
+  maxHp: number
+}
+
+/** 兵线小兵：沿道路推进、遇敌即战、相邻攻城 */
+export type MinionStatus = 'marching' | 'fighting' | 'sieging'
+
+export interface MinionState {
+  id: string
+  faction: Faction
+  coord: Coord
+  hp: number
+  maxHp: number
+  /** 目标主城坐标；城破或目标失效后重选 */
+  target: Coord | null
+  /** 沿道路的剩余路径，末格为主城相邻格 */
+  path: Coord[]
+  /** 关口等慢地形上还需原地等待的 Tick 数 */
+  moveDelay: number
+  status: MinionStatus
+  /** 出兵回合，用于战报统计 */
+  wave: number
+  /** 首次进入交战的回合，0 表示未交战 */
+  engagedSince: number
 }
 
 export interface SimSnapshot {
   round: number
   generals: GeneralState[]
+  minions: MinionState[]
   cities: BaseCity[]
   occupation: Map<string, Faction>
   occupationVersion: number
@@ -374,6 +403,8 @@ export interface SimSaveState {
   rngState: number
   cities: BaseCity[]
   generals: GeneralState[]
+  /** 旧存档没有兵线，读取时按空数组处理 */
+  minions?: MinionState[]
   occupation: [string, Faction][]
   events: SimEvent[]
 }

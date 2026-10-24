@@ -89,3 +89,78 @@ export function findPath(
 
   return null
 }
+
+/** 兵线只在道路与关口上推进：道路 1 Tick，关口 2 Tick */
+const ROAD_STEP = 1
+const GATE_STEP = 2
+
+/**
+ * 沿道路与关口的寻路，用于兵线。起点可以是任意格（通常是主城邻格），
+ * 中间格与终点必须 `road || gate`；多个 goal 时返回到达的最近一条路径。
+ * 展开顺序固定，代价相同按插入顺序决胜，保证确定性。
+ */
+export function findRoadPath(
+  terrain: WorldTerrain,
+  start: Coord,
+  goals: Coord[],
+): PathResult | null {
+  const goalKeys = new Set(goals.map((goal) => coordKey(goal)))
+  if (goalKeys.size === 0) return null
+
+  const startKey = coordKey(start)
+  if (goalKeys.has(startKey)) return { path: [], cost: 0 }
+
+  const open = new Map<string, { coord: Coord; cost: number }>()
+  const parent = new Map<string, string | null>()
+  const coords = new Map<string, Coord>()
+  const closed = new Set<string>()
+
+  open.set(startKey, { coord: start, cost: 0 })
+  parent.set(startKey, null)
+  coords.set(startKey, start)
+
+  while (open.size > 0) {
+    let currentKey = ''
+    let current: { coord: Coord; cost: number } | null = null
+    for (const [key, node] of open) {
+      if (!current || node.cost < current.cost) {
+        current = node
+        currentKey = key
+      }
+    }
+    if (!current) break
+
+    open.delete(currentKey)
+    if (closed.has(currentKey)) continue
+    closed.add(currentKey)
+
+    if (goalKeys.has(currentKey)) {
+      const path: Coord[] = []
+      let cursor: string | null = currentKey
+      while (cursor && parent.get(cursor)) {
+        path.push({ ...coords.get(cursor)! })
+        cursor = parent.get(cursor) ?? null
+      }
+      path.reverse()
+      return { path, cost: current.cost }
+    }
+
+    for (const neighbor of neighbors(current.coord)) {
+      const key = coordKey(neighbor)
+      if (closed.has(key)) continue
+
+      const tile = getTile(terrain, neighbor)
+      if (!tile?.passable || (!tile.road && !tile.gate)) continue
+
+      const cost = current.cost + (tile.gate ? GATE_STEP : ROAD_STEP)
+      const existing = open.get(key)
+      if (existing && existing.cost <= cost) continue
+
+      open.set(key, { coord: neighbor, cost })
+      parent.set(key, currentKey)
+      coords.set(key, neighbor)
+    }
+  }
+
+  return null
+}

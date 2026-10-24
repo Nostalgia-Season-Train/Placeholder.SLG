@@ -1,8 +1,15 @@
 import * as THREE from 'three'
-import { allianceNameOf, type BaseCity, type Faction, type GeneralState } from '@shared/types'
+import {
+  allianceNameOf,
+  type BaseCity,
+  type Faction,
+  type GeneralState,
+  type MinionState,
+} from '@shared/types'
 import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
+import { MinionLayer } from './MinionLayer'
 import { hexCornerPoints, tileKey } from '@shared/map/hex'
 import type { MapData } from '@shared/map/MapGenerator'
 import { RiverLayer } from './RiverLayer'
@@ -13,6 +20,11 @@ export interface HoverCity {
   name: string
   faction: Faction
   factionName: string
+  /** 当前归属与城防，城破后会变化 */
+  owner: Faction
+  ownerName: string
+  hp: number
+  maxHp: number
 }
 
 export interface HoverInfo {
@@ -68,6 +80,7 @@ export class MapRenderer {
   private riverLayer: RiverLayer | null = null
   private agentLayer: AgentLayer | null = null
   private cityLayer: CityLayer | null = null
+  private minionLayer: MinionLayer | null = null
   /** 开局配置的同盟名称与关系，用于悬停文案 */
   private diplomacy: Diplomacy | null = null
 
@@ -138,7 +151,8 @@ export class MapRenderer {
 
     this.agentLayer = new AgentLayer(toWorld)
     this.cityLayer = new CityLayer(toWorld)
-    this.scene.add(this.agentLayer.group, this.cityLayer.group)
+    this.minionLayer = new MinionLayer(toWorld)
+    this.scene.add(this.agentLayer.group, this.cityLayer.group, this.minionLayer.group)
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove)
@@ -186,6 +200,12 @@ export class MapRenderer {
     this.cityLayer?.setCities(cities, diplomacy)
   }
 
+  /** Sync minion lanes */
+  setMinions(minions: MinionState[], diplomacy?: Diplomacy, tickMs?: number): void {
+    if (diplomacy) this.diplomacy = diplomacy
+    this.minionLayer?.setMinions(minions, diplomacy, tickMs)
+  }
+
   /** Sync tile ownership */
   setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
     this.diplomacy = diplomacy
@@ -194,9 +214,10 @@ export class MapRenderer {
 
   /** Recolor existing overlays and tokens after the player faction changes */
   setDiplomacy(diplomacy: Diplomacy): void {
-    this.diplomacy = diplomacy
+    if (diplomacy) this.diplomacy = diplomacy
     this.agentLayer?.setDiplomacy(diplomacy)
     this.cityLayer?.setDiplomacy(diplomacy)
+    this.minionLayer?.setDiplomacy(diplomacy)
   }
 
   /** 悬停文案使用开局配置的同盟名称 */
@@ -227,6 +248,8 @@ export class MapRenderer {
     this.agentLayer = null
     this.cityLayer?.dispose()
     this.cityLayer = null
+    this.minionLayer?.dispose()
+    this.minionLayer = null
 
     this.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -251,6 +274,7 @@ export class MapRenderer {
     this.disposeMap()
     this.agentLayer?.clear()
     this.cityLayer?.clear()
+    this.minionLayer?.clear()
     this.hoveredCityKey = null
 
     const map = mapData
@@ -356,6 +380,7 @@ export class MapRenderer {
     this.riverLayer?.update(this.elapsed)
     this.agentLayer?.update(dt)
     this.cityLayer?.update(dt)
+    this.minionLayer?.update(dt)
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -434,7 +459,7 @@ export class MapRenderer {
     const city = cityHit ? this.cityLayer?.resolvePick(cityHit.object) ?? null : null
 
     if (city) {
-      const key = `${city.faction}:${city.coord.q},${city.coord.r}`
+      const key = `${city.coord.q},${city.coord.r}`
       if (key === this.hoveredCityKey) return
 
       const tile = this.map.tileMap.get(tileKey(city.coord.q, city.coord.r))
@@ -450,7 +475,7 @@ export class MapRenderer {
         r: city.coord.r,
         level: tile.level,
         name: city.name,
-        desc: `${this.cityFactionName(city.faction)}小队出发地`,
+        desc: `${this.cityFactionName(city.owner)}主城`,
         height: tile.height,
         isBank: false,
         isWall: false,
@@ -459,6 +484,10 @@ export class MapRenderer {
           name: city.name,
           faction: city.faction,
           factionName: this.cityFactionName(city.faction),
+          owner: city.owner,
+          ownerName: this.cityFactionName(city.owner),
+          hp: city.hp,
+          maxHp: city.maxHp,
         },
       })
       return

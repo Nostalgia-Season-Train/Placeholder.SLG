@@ -5,7 +5,7 @@
  */
 import { createSeedRandom, type MapData, type SeedRandom } from '../../../src-shared/map/MapGenerator'
 import { chooseTarget } from './decision'
-import { findPath } from './pathfinding'
+import { findPath, findRoadPath } from './pathfinding'
 import {
   coordKey,
   getTile,
@@ -27,6 +27,7 @@ import {
   type Coord,
   type GeneralState,
   type GeneralRole,
+  type MinionState,
   type Personality,
   type SimEvent,
   type SimSaveState,
@@ -49,6 +50,30 @@ export interface SimSignal {
   label: string
   detail: string
 }
+
+/**
+ * 兵线：每 20 Tick，每座主城按当前归属出一波 3 个小兵，
+ * 只走道路与关口，遇敌即战，相邻攻城；沿用每 Tick 一次普攻的现有战斗。
+ */
+const WAVE_INTERVAL = 20
+const WAVE_SIZE = 3
+const MINION_MAX_HP = 70
+const MINION_DAMAGE = 7
+const MINION_CITY_DAMAGE = 8
+const CITY_MAX_HP = 600
+const MAX_MINIONS_PER_FACTION = 15
+
+/** 兵线战报：小兵全灭或主城易手时写入，由运行时转发到世界频道 */
+export interface SimReport {
+  round: number
+  faction: Faction
+  text: string
+}
+
+/** 交战单位：角色与小兵共用同一套普攻结算 */
+type CombatUnit =
+  | { kind: 'general'; unit: GeneralState }
+  | { kind: 'minion'; unit: MinionState }
 
 /** Stat grades mapped onto a 1..3 power scale */
 const GRADE_SCORE: Record<StatGrade, number> = { 低: 1, 中: 2, 高: 3 }
@@ -91,6 +116,17 @@ function cloneGeneral(general: GeneralState): GeneralState {
   }
 }
 
+function cloneMinion(minion: MinionState): MinionState {
+  return {
+    ...minion,
+    coord: { ...minion.coord },
+    target: minion.target ? { ...minion.target } : null,
+    path: minion.path.map((tile) => ({ ...tile })),
+    moveDelay: minion.moveDelay ?? 0,
+    engagedSince: minion.engagedSince ?? 0,
+  }
+}
+
 export class MarchSimulation {
   readonly terrain: WorldTerrain
   private readonly rng: SeedRandom
@@ -98,9 +134,11 @@ export class MarchSimulation {
   private readonly alliances: AllianceConfig[]
   private readonly cities: BaseCity[]
   private readonly generals: GeneralState[]
+  private readonly minions: MinionState[] = []
   private readonly occupation = new Map<string, Faction>()
   private readonly events: SimEvent[] = []
   private readonly signals: SimSignal[] = []
+  private readonly reports: SimReport[] = []
   private round = 0
   private occupationVersion = 0
   private eventLimit = 14
@@ -112,8 +150,16 @@ export class MarchSimulation {
     this.alliances = alliances.map((alliance) => ({ ...alliance }))
 
     if (restore) {
-      this.cities = restore.cities.map((city) => ({ ...city, coord: { ...city.coord } }))
+      this.cities = restore.cities.map((city) => ({
+        ...city,
+        coord: { ...city.coord },
+        // 旧存档没有归属与城防，按原主、满血处理
+        owner: city.owner ?? city.faction,
+        maxHp: city.maxHp ?? CITY_MAX_HP,
+        hp: city.hp ?? city.maxHp ?? CITY_MAX_HP,
+      }))
       this.generals = restore.generals.map(cloneGeneral)
+      for (const minion of restore.minions ?? []) this.minions.push(cloneMinion(minion))
       for (const [key, faction] of restore.occupation) this.occupation.set(key, faction)
       this.round = restore.round
       this.occupationVersion = restore.occupationVersion
@@ -136,6 +182,7 @@ export class MarchSimulation {
       rngState: this.rng.state,
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       generals: this.generals.map(cloneGeneral),
+      minions: this.minions.map(cloneMinion),
       occupation: [...this.occupation.entries()],
       events: this.events.map((event) => ({ ...event })),
     }
@@ -144,7 +191,7 @@ export class MarchSimulation {
   /**
    * Advance one tick. A tick is also one combat round:
    * units within one tile of an enemy are locked and each lands one basic attack,
-   * the rest move, capture or rest.
+   * the rest move, capture or rest. Minions spawn first, then fight or push their lane.
    */
   step(): void {
     this.round += 1
@@ -153,23 +200,38 @@ export class MarchSimulation {
       if (general.retreatGrace > 0) general.retreatGrace -= 1
     }
 
-    // 交战中收到撤退指令的单位优先脱离，脱离保护期内不会被再次拖入交战
+    this.spawnWave()
+
+    const units = this.combatUnits()
     const locked = new Set<string>()
-    for (const general of this.generals) {
-      if (general.order?.stance !== 'retreat' || !this.engaged(general)) continue
-      this.disengage(general)
-      locked.add(general.id)
+
+    // 交战中收到撤退指令的单位优先脱离，脱离保护期内不会被再次拖入交战
+    for (const unit of units) {
+      if (unit.kind !== 'general') continue
+      if (unit.unit.order?.stance !== 'retreat' || !this.engaged(unit, units)) continue
+      this.disengage(unit.unit)
+      locked.add(unit.unit.id)
     }
 
-    const fighters = this.generals.filter((general) => this.engaged(general))
+    const fighters = units.filter((unit) => this.engaged(unit, units))
     if (fighters.length > 0) {
       this.fightRound(fighters)
-      for (const fighter of fighters) locked.add(fighter.id)
+      for (const fighter of fighters) locked.add(fighter.unit.id)
+    }
+
+    // 不再交战的兵线清空交战起点，下次重新计时
+    for (const unit of units) {
+      if (unit.kind === 'minion' && !fighters.includes(unit)) unit.unit.engagedSince = 0
     }
 
     for (const general of this.generals) {
       if (locked.has(general.id)) continue
       this.act(general)
+    }
+
+    for (const minion of this.minions) {
+      if (locked.has(minion.id)) continue
+      this.actMinion(minion)
     }
   }
 
@@ -196,6 +258,11 @@ export class MarchSimulation {
     return this.signals.splice(0, this.signals.length)
   }
 
+  /** 取走本轮累积的兵线战报，供运行时转发到世界频道 */
+  drainReports(): SimReport[] {
+    return this.reports.splice(0, this.reports.length)
+  }
+
   /** Read-only snapshot shared with the rendering layer */
   snapshot(): SimSnapshot {
     const factionCounts: Record<Faction, number> = { red: 0, cyan: 0, gold: 0 }
@@ -212,6 +279,7 @@ export class MarchSimulation {
         order: general.order ? { ...general.order, target: general.order.target ? { ...general.order.target } : null } : null,
       })),
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
+      minions: this.minions.map(cloneMinion),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
       events: this.events.slice(-this.eventLimit).reverse(),
@@ -239,7 +307,14 @@ export class MarchSimulation {
       if (!coord) return
 
       this.occupation.set(coordKey(coord), alliance.faction)
-      result.push({ faction: alliance.faction, coord: { ...coord }, name: `${alliance.name}主城` })
+      result.push({
+        faction: alliance.faction,
+        owner: alliance.faction,
+        coord: { ...coord },
+        name: `${alliance.name}主城`,
+        hp: CITY_MAX_HP,
+        maxHp: CITY_MAX_HP,
+      })
       this.log(alliance.faction, `${alliance.name}主城设立于（${coord.q},${coord.r}）`)
     })
 
@@ -317,6 +392,196 @@ export class MarchSimulation {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Minion lanes                                                        */
+  /* ------------------------------------------------------------------ */
+
+  private cityKeys(): Set<string> {
+    return new Set(this.cities.map((city) => coordKey(city.coord)))
+  }
+
+  private cityAt(coord: Coord): BaseCity | undefined {
+    return this.cities.find((city) => coordKey(city.coord) === coordKey(coord))
+  }
+
+  private nameOf(faction: Faction): string {
+    return this.alliances.find((item) => item.faction === faction)?.name ?? faction
+  }
+
+  /** 关系为「敌方」的同盟与其余所有同盟互为敌对；我方与友方互为友军 */
+  private hostileFactions(faction: Faction): Set<Faction> {
+    const hostile = new Set(
+      this.alliances.filter((item) => item.relation === 'hostile').map((item) => item.faction),
+    )
+    if (hostile.has(faction)) {
+      return new Set(
+        this.alliances
+          .map((item) => item.faction)
+          .filter((other) => other !== faction && !hostile.has(other)),
+      )
+    }
+    hostile.delete(faction)
+    return hostile
+  }
+
+  /** 主城相邻的道路或关口地块，作为兵线终点候选 */
+  private cityApproaches(coord: Coord): Coord[] {
+    const goals: Coord[] = []
+    for (const neighbor of neighbors(coord)) {
+      const tile = getTile(this.terrain, neighbor)
+      if (tile?.passable && (tile.road || tile.gate)) goals.push({ ...neighbor })
+    }
+    return goals
+  }
+
+  /** 本城出兵点：按 neighbors 顺序取第一个道路或关口邻格 */
+  private cityRoadOutskirt(coord: Coord): Coord | null {
+    for (const neighbor of neighbors(coord)) {
+      const tile = getTile(this.terrain, neighbor)
+      if (tile?.passable && (tile.road || tile.gate)) return { ...neighbor }
+    }
+    return null
+  }
+
+  /** 从当前位置选一条通往敌对主城的道路，取路径最短者，平手按 cities 顺序 */
+  private chooseEnemyRoute(
+    faction: Faction,
+    start: Coord,
+  ): { city: BaseCity; path: Coord[] } | null {
+    const enemies = this.hostileFactions(faction)
+    let best: { city: BaseCity; path: Coord[]; cost: number } | null = null
+
+    for (const city of this.cities) {
+      if (!enemies.has(city.owner)) continue
+      const route = findRoadPath(this.terrain, start, this.cityApproaches(city.coord))
+      if (!route) continue
+      if (!best || route.cost < best.cost) best = { city, path: route.path, cost: route.cost }
+    }
+
+    return best ? { city: best.city, path: best.path } : null
+  }
+
+  /** 每 20 Tick 由每座主城按当前归属出一波小兵 */
+  private spawnWave(): void {
+    if (this.round % WAVE_INTERVAL !== 0) return
+
+    for (const city of this.cities) {
+      const faction = city.owner
+      const alive = this.minions.filter((minion) => minion.faction === faction).length
+      if (alive >= MAX_MINIONS_PER_FACTION) continue
+
+      const start = this.cityRoadOutskirt(city.coord)
+      if (!start) continue
+
+      const route = this.chooseEnemyRoute(faction, start)
+      if (!route) continue
+
+      for (let index = 0; index < WAVE_SIZE; index += 1) {
+        this.minions.push({
+          id: `minion-${this.round}-${faction}-${index}`,
+          faction,
+          coord: { ...start },
+          hp: MINION_MAX_HP,
+          maxHp: MINION_MAX_HP,
+          target: { ...route.city.coord },
+          path: route.path.map((tile) => ({ ...tile })),
+          moveDelay: 0,
+          status: 'marching',
+          wave: this.round,
+          engagedSince: 0,
+        })
+      }
+
+      this.log(
+        faction,
+        `${this.nameOf(faction)}自${city.name}派出${WAVE_SIZE}个小兵，目标${route.city.name}`,
+      )
+    }
+  }
+
+  /** 小兵单个 Tick：重选目标、攻城或沿道路推进一格 */
+  private actMinion(minion: MinionState): void {
+    let city = minion.target ? this.cityAt(minion.target) : undefined
+    if (
+      !city ||
+      city.owner === minion.faction ||
+      !this.hostileFactions(minion.faction).has(city.owner)
+    ) {
+      const route = this.chooseEnemyRoute(minion.faction, minion.coord)
+      if (!route) {
+        minion.target = null
+        minion.path = []
+        return
+      }
+      minion.target = { ...route.city.coord }
+      minion.path = route.path.map((tile) => ({ ...tile }))
+      minion.moveDelay = 0
+      city = route.city
+    }
+
+    if (hexDistance(minion.coord, city.coord) <= 1) {
+      minion.status = 'sieging'
+      this.siegeCity(city, minion.faction)
+      return
+    }
+
+    if (minion.moveDelay > 0) {
+      minion.moveDelay -= 1
+      return
+    }
+
+    const next = minion.path[0]
+    if (!next) {
+      // 路径走完却没到城边，重新沿道路计算一次
+      const route = this.chooseEnemyRoute(minion.faction, minion.coord)
+      if (route) {
+        minion.target = { ...route.city.coord }
+        minion.path = route.path.map((tile) => ({ ...tile }))
+      }
+      return
+    }
+
+    minion.path.shift()
+    minion.coord = { ...next }
+    if (getTile(this.terrain, next)?.gate) minion.moveDelay = 1
+    minion.status = 'marching'
+  }
+
+  private siegeCity(city: BaseCity, faction: Faction): void {
+    city.hp = Math.max(0, city.hp - MINION_CITY_DAMAGE)
+    if (city.hp > 0) return
+    this.captureCity(city, faction)
+  }
+
+  /** 城破：归属改攻方、城防回满、地块同步，并通知原主与攻方角色 */
+  private captureCity(city: BaseCity, attacker: Faction): void {
+    const previous = city.owner
+    city.owner = attacker
+    city.hp = city.maxHp
+    this.occupation.set(coordKey(city.coord), attacker)
+    this.occupationVersion += 1
+
+    const text = `${this.nameOf(attacker)}攻破${city.name}，${this.nameOf(previous)}失城`
+    this.log(attacker, text)
+    this.reports.push({ round: this.round, faction: attacker, text })
+    this.signal('lost', previous, null, '主城失守', `${city.name}被${this.nameOf(attacker)}攻破`)
+    this.signal('capture', attacker, null, '攻破主城', `${this.nameOf(attacker)}攻破${city.name}`)
+  }
+
+  private loseMinion(minion: MinionState, attacker: Faction): void {
+    const index = this.minions.indexOf(minion)
+    if (index < 0) return
+    this.minions.splice(index, 1)
+
+    const left = this.minions.filter((item) => item.faction === minion.faction).length
+    const from = minion.engagedSince > 0 ? minion.engagedSince : minion.wave
+    const text =
+      `${this.nameOf(minion.faction)}的兵线在（${minion.coord.q},${minion.coord.r}）` +
+      `被${this.nameOf(attacker)}击溃，尚存${left}个小兵（第${from}~${this.round}回合）`
+    this.log(minion.faction, text)
+    this.reports.push({ round: this.round, faction: minion.faction, text })
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Single general turn                                                 */
   /* ------------------------------------------------------------------ */
 
@@ -384,7 +649,14 @@ export class MarchSimulation {
       locked.add(coordKey(other.target))
     }
 
-    const choice = chooseTarget(general, this.terrain, this.occupation, locked, this.random)
+    const choice = chooseTarget(
+      general,
+      this.terrain,
+      this.occupation,
+      locked,
+      this.random,
+      this.cityKeys(),
+    )
     if (!choice) return
 
     const tile = getTile(this.terrain, choice.target)
@@ -413,6 +685,18 @@ export class MarchSimulation {
 
     const owner = this.occupation.get(key)
     if (owner === general.faction) {
+      general.target = null
+      general.path = []
+      general.captureProgress = 0
+      general.status = 'garrison'
+      if (general.order?.stance === 'attack' || general.order?.stance === 'retreat') {
+        general.order = null
+      }
+      return
+    }
+
+    // 主城格只由小兵破城改归属，角色到达后视为驻守
+    if (this.cityAt(general.coord)) {
       general.target = null
       general.path = []
       general.captureProgress = 0
@@ -493,60 +777,95 @@ export class MarchSimulation {
   /* Combat                                                              */
   /* ------------------------------------------------------------------ */
 
+  /** 全部可参战单位：角色在前、小兵在后，顺序固定以保证随机数消费顺序 */
+  private combatUnits(): CombatUnit[] {
+    return [
+      ...this.generals.map((unit): CombatUnit => ({ kind: 'general', unit })),
+      ...this.minions.map((unit): CombatUnit => ({ kind: 'minion', unit })),
+    ]
+  }
+
   /** 同格或 6 个周边地块的敌对单位即进入交战状态；休整与脱战保护期内除外 */
-  private engaged(general: GeneralState): boolean {
-    if (general.restTurns > 0 || general.retreatGrace > 0) return false
-    return this.generals.some(
+  private engaged(unit: CombatUnit, units: CombatUnit[]): boolean {
+    if (unit.kind === 'general') {
+      if (unit.unit.restTurns > 0 || unit.unit.retreatGrace > 0) return false
+    }
+    return units.some(
       (other) =>
-        other !== general &&
-        other.faction !== general.faction &&
-        other.restTurns === 0 &&
-        hexDistance(other.coord, general.coord) <= 1,
+        other.unit !== unit.unit &&
+        other.unit.faction !== unit.unit.faction &&
+        (other.kind === 'minion' || other.unit.restTurns === 0) &&
+        hexDistance(other.unit.coord, unit.unit.coord) <= 1,
     )
   }
 
   /**
    * 一个 Tick 即一个战斗回合：交战双方各进行一次普攻，伤害同时结算。
-   * 随机数按 this.generals 的固定顺序消费，保证推演确定性。
+   * 角色普攻按 units 中的固定顺序消费随机数；小兵伤害固定，不消费随机数。
    */
-  private fightRound(fighters: GeneralState[]): void {
-    const incoming = new Map<string, number>()
+  private fightRound(fighters: CombatUnit[]): void {
+    const incoming = new Map<string, { damage: number; attacker: Faction }>()
 
     for (const fighter of fighters) {
       const target = this.chooseCombatTarget(fighter, fighters)
       if (!target) continue
-      const damage = this.basicDamage(fighter)
-      incoming.set(target.id, (incoming.get(target.id) ?? 0) + damage)
+      const damage = fighter.kind === 'general' ? this.basicDamage(fighter.unit) : MINION_DAMAGE
+      const entry = incoming.get(target.unit.id)
+      if (entry) entry.damage += damage
+      else incoming.set(target.unit.id, { damage, attacker: fighter.unit.faction })
     }
 
-    for (const [id, damage] of incoming) {
-      const target = this.generals.find((general) => general.id === id)
+    const fallenGenerals: GeneralState[] = []
+    const fallenMinions: { minion: MinionState; attacker: Faction }[] = []
+    const fallenIds = new Set<string>()
+
+    for (const [id, entry] of incoming) {
+      const target = fighters.find((unit) => unit.unit.id === id)
       if (!target) continue
-      target.hp = Math.max(0, target.hp - damage)
-      if (target.hp > 0) continue
-      this.defeat(target)
+      target.unit.hp = Math.max(0, target.unit.hp - entry.damage)
+      if (target.unit.hp > 0) continue
+      fallenIds.add(id)
+      if (target.kind === 'general') fallenGenerals.push(target.unit)
+      else fallenMinions.push({ minion: target.unit, attacker: entry.attacker })
     }
+
+    for (const general of fallenGenerals) this.defeat(general)
+    for (const entry of fallenMinions) this.loseMinion(entry.minion, entry.attacker)
 
     for (const fighter of fighters) {
-      if (fighter.status === 'fighting') continue
-      fighter.status = 'fighting'
-      this.signal('encounter', fighter.faction, fighter.id, '遭遇战', `${fighter.name}进入交战`)
+      if (fallenIds.has(fighter.unit.id)) continue
+      if (fighter.kind === 'general') {
+        if (fighter.unit.status === 'fighting') continue
+        fighter.unit.status = 'fighting'
+        this.signal('encounter', fighter.unit.faction, fighter.unit.id, '遭遇战', `${fighter.unit.name}进入交战`)
+      } else {
+        // 记录交战起点，战报里用回合区间描述这场遭遇
+        if (fighter.unit.engagedSince === 0) fighter.unit.engagedSince = this.round
+        fighter.unit.status = 'fighting'
+      }
     }
   }
 
   /** 同格敌人优先，其次是相邻敌人；同等条件下优先攻击兵力最少者 */
-  private chooseCombatTarget(fighter: GeneralState, fighters: GeneralState[]): GeneralState | null {
-    const enemies = fighters.filter(
-      (other) => other !== fighter && other.faction !== fighter.faction,
+  private chooseCombatTarget(fighter: CombatUnit, units: CombatUnit[]): CombatUnit | null {
+    const enemies = units.filter(
+      (other) => other.unit !== fighter.unit && other.unit.faction !== fighter.unit.faction,
     )
     if (enemies.length === 0) return null
 
-    const sameTile = enemies.filter((other) => coordKey(other.coord) === coordKey(fighter.coord))
+    const sameTile = enemies.filter(
+      (other) => coordKey(other.unit.coord) === coordKey(fighter.unit.coord),
+    )
     const pool = sameTile.length > 0 ? sameTile : enemies
 
-    let best: GeneralState = pool[0]!
+    let best: CombatUnit = pool[0]!
     for (const enemy of pool) {
-      if (enemy.hp < best.hp || (enemy.hp === best.hp && enemy.id < best.id)) best = enemy
+      if (
+        enemy.unit.hp < best.unit.hp ||
+        (enemy.unit.hp === best.unit.hp && enemy.unit.id < best.unit.id)
+      ) {
+        best = enemy
+      }
     }
     return best
   }
