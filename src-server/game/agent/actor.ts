@@ -11,6 +11,7 @@ import {
   allianceNameOf,
   FACTIONS,
   formatUnitName,
+  personalitySummary,
   type AllianceNames,
   type BotStance,
   type Coord,
@@ -412,7 +413,9 @@ export class CharacterAgent {
     return [
       `你是【${allianceNameOf(this.deps.allianceNames(), card.faction)}】${parts.join('·')}，定位${card.role}。`,
       card.description ? `描述：${card.description}` : '',
-      card.personality ? `性格：${card.personality}` : '',
+      card.personality.length > 0
+        ? `性格：${personalitySummary(card.personality).label}（${personalitySummary(card.personality).behavior}）`
+        : '',
       card.dialoguePrompt ? `对话风格：${card.dialoguePrompt}` : '',
     ]
       .filter(Boolean)

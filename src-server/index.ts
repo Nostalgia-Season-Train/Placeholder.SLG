@@ -10,15 +10,19 @@ import { GameRuntime } from './runtime/GameRuntime'
 import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
 import { closeCardStore } from './runtime/cardStore'
 import {
+  DEFAULT_PERSONALITY,
   FACTIONS,
   GENERAL_POSITIONS,
   GENERAL_ROLES,
   GENERAL_TEAMS,
+  PERSONALITY_TAGS,
+  personalityConflicts,
   STAT_GRADES,
   type Faction,
   type GeneralPosition,
   type GeneralRole,
   type GeneralTeam,
+  type PersonalityTag,
   type StatGrade,
 } from '../src-shared/types'
 import type { ChatChannel } from '../src-shared/chat'
@@ -119,6 +123,26 @@ function asTeam(value: unknown): GeneralTeam | null {
   throw new HttpError(400, '未知团')
 }
 
+/** 性格只接受固定标签数组；同一维度内出现多个标签视为冲突 */
+function asPersonality(value: unknown): PersonalityTag[] {
+  if (value === undefined || value === null || value === '') return [...DEFAULT_PERSONALITY]
+  if (!Array.isArray(value)) throw new HttpError(400, '性格需要标签数组')
+  const picked: PersonalityTag[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !PERSONALITY_TAGS.includes(item as PersonalityTag)) {
+      throw new HttpError(400, '未知性格标签')
+    }
+    const tag = item as PersonalityTag
+    if (picked.includes(tag)) continue
+    const conflict = picked.find((existing) => personalityConflicts(existing, tag))
+    if (conflict) {
+      throw new HttpError(400, `性格标签冲突：${conflict} 与 ${tag} 属于同一维度`)
+    }
+    picked.push(tag)
+  }
+  return picked.length > 0 ? picked : [...DEFAULT_PERSONALITY]
+}
+
 /** Body of POST /api/cards and PATCH /api/cards/:id */
 function readCardInput(body: Record<string, unknown>): CardCreateDTO {
   const input: CardCreateDTO = {
@@ -129,8 +153,7 @@ function readCardInput(body: Record<string, unknown>): CardCreateDTO {
     position: asPosition(body.position),
     attack: asGrade(body.attack),
     magic: asGrade(body.magic),
-    personality:
-      typeof body.personality === 'string' ? body.personality.trim().slice(0, 120) : '',
+    personality: asPersonality(body.personality),
   }
   if (typeof body.description === 'string') input.description = body.description.slice(0, 2000)
   if (typeof body.dialoguePrompt === 'string') {

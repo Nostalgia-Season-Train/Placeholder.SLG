@@ -117,14 +117,14 @@ function removeAlliance(faction: Faction): void {
 
 function cardMeta(card: CharacterCardDTO): string {
   const parts: string[] = [card.role]
-  if (card.personality) parts.push(card.personality)
+  if (card.personality.length > 0) parts.push(card.personality.join('、'))
   return parts.join(' · ')
 }
 
 /** 对局内的角色才展示职位，角色库不暴露职位字段 */
 function rosterMeta(card: CharacterCardDTO): string {
   const parts = [card.role, `职位 ${card.position === '无' ? '无（上前线）' : card.position}`]
-  if (card.personality) parts.push(card.personality)
+  if (card.personality.length > 0) parts.push(card.personality.join('、'))
   return parts.join(' · ')
 }
 

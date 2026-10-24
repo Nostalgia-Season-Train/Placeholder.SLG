@@ -426,7 +426,7 @@ function cardMeta(card: CharacterCardDTO): string {
     `攻击 ${card.attack}`,
     `魔力 ${card.magic}`,
   ]
-  if (card.personality) parts.push(card.personality)
+  if (card.personality.length > 0) parts.push(card.personality.join('、'))
   return parts.join(' · ')
 }
 

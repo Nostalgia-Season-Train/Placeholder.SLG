@@ -17,6 +17,7 @@ import {
 } from './terrain'
 import {
   ORDER_LABELS,
+  personalityOf,
   type AllianceConfig,
   type BaseCity,
   type BotOrder,
@@ -65,35 +66,6 @@ function maxHpOf(power: number, role: GeneralRole): number {
   return Math.round((60 + power * 2) * ROLE_COMBAT[role].hp)
 }
 
-/** Personality tags adjust the bot's target-selection weights */
-const PERSONALITY_ADJUSTMENTS: Record<string, { aggression: number; caution: number }> = {
-  勇猛: { aggression: 0.25, caution: -0.15 },
-  激进: { aggression: 0.3, caution: -0.25 },
-  好战: { aggression: 0.3, caution: -0.2 },
-  鲁莽: { aggression: 0.25, caution: -0.3 },
-  沉稳: { aggression: -0.05, caution: 0.1 },
-  谨慎: { aggression: -0.1, caution: 0.25 },
-  多疑: { aggression: -0.05, caution: 0.2 },
-  懦弱: { aggression: -0.35, caution: 0.25 },
-  胆小: { aggression: -0.3, caution: 0.2 },
-}
-
-function clamp01(value: number): number {
-  return Math.min(0.9, Math.max(0.1, value))
-}
-
-/** Translate card personality text into bot decision weights */
-function personalityFromCard(text: string): Personality {
-  let aggression = 0.5
-  let caution = 0.55
-  for (const [tag, adjust] of Object.entries(PERSONALITY_ADJUSTMENTS)) {
-    if (!text.includes(tag)) continue
-    aggression += adjust.aggression
-    caution += adjust.caution
-  }
-  return { aggression: clamp01(aggression), caution: clamp01(caution) }
-}
-
 function cloneGeneral(general: GeneralState): GeneralState {
   const role = general.role ?? '武将'
   const maxHp = general.maxHp ?? maxHpOf(general.power, role)
@@ -110,7 +82,7 @@ function cloneGeneral(general: GeneralState): GeneralState {
     moveDelay: general.moveDelay ?? 0,
     retreatGrace: general.retreatGrace ?? 0,
     coord: { ...general.coord },
-    personality: { ...general.personality },
+    personality: { ...general.personality, assault: general.personality.assault ?? 0 },
     order: general.order
       ? { ...general.order, target: general.order.target ? { ...general.order.target } : null }
       : null,
@@ -236,7 +208,7 @@ export class MarchSimulation {
         coord: { ...general.coord },
         target: general.target ? { ...general.target } : null,
         path: general.path.map((tile) => ({ ...tile })),
-        personality: { ...general.personality },
+        personality: { ...general.personality, assault: general.personality.assault ?? 0 },
         order: general.order ? { ...general.order, target: general.order.target ? { ...general.order.target } : null } : null,
       })),
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
@@ -309,7 +281,7 @@ export class MarchSimulation {
       power,
       hp: maxHp,
       maxHp,
-      personality: personalityFromCard(card.personality),
+      personality: personalityOf(card.personality),
       order: null,
       target: null,
       path: [],

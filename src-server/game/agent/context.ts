@@ -5,6 +5,7 @@
 import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
 import {
   allianceNameOf,
+  personalitySummary,
   type AllianceNames,
   type Coord,
   type Faction,
@@ -70,7 +71,8 @@ export function buildActorContext(
       职位: card.position,
       团: card.team ?? '',
       定位: card.role,
-      性格: card.personality,
+      性格: personalitySummary(card.personality).label,
+      性格倾向: personalitySummary(card.personality).behavior,
       描述: card.description,
       对话提示词: card.dialoguePrompt,
     },

@@ -41,7 +41,7 @@ export function chooseTarget(
     const distance = hexDistance(general.coord, tile.coord)
     if (distance === 0) continue
 
-    const enemyBonus = owner ? 6 + personality.aggression * 14 : 0
+    const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
     const lockPenalty = locked.has(key) ? 30 : 0
     const roughScore = tile.value + enemyBonus - distance * weight * 2 - lockPenalty
 
@@ -59,7 +59,7 @@ export function chooseTarget(
     if (result.cost > MAX_PATH_COST) continue
 
     const owner = occupation.get(coordKey(entry.tile.coord))
-    const enemyBonus = owner ? 6 + personality.aggression * 14 : 0
+    const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
     const score = entry.tile.value + enemyBonus - result.cost * weight + random() * 3
 
     if (score > bestScore) {

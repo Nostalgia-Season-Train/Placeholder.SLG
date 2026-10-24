@@ -5,15 +5,19 @@
  */
 import { computed, ref, watch } from 'vue'
 import {
+  DEFAULT_PERSONALITY,
   FACTION_NAMES,
   GENERAL_POSITIONS,
   GENERAL_ROLES,
   GENERAL_TEAMS,
+  personalitySummary,
   STAT_GRADES,
   type AllianceConfig,
   type GeneralTeam,
+  type PersonalityTag,
 } from '@shared/types'
 import type { CardCreateDTO, CharacterCardDTO } from '@shared/protocol'
+import PersonalityPicker from './PersonalityPicker.vue'
 
 const props = defineProps<{
   /** null 表示新增 */
@@ -41,7 +45,7 @@ function blankDraft(): CardCreateDTO {
     position: '无',
     attack: '中',
     magic: '低',
-    personality: '',
+    personality: [...DEFAULT_PERSONALITY],
     description: '',
     dialoguePrompt: '',
     authorNote: '',
@@ -96,6 +100,17 @@ const selfFaction = computed(
 const showTeam = computed(
   () => showAssignment.value && draft.value.faction === selfFaction.value,
 )
+
+/** 当前标签组合的行为说明，帮助玩家区分相邻档位 */
+const personalityNote = computed(() => personalitySummary(draft.value.personality).behavior)
+
+/** 性格选择浮窗 */
+const pickerOpen = ref(false)
+
+function applyPersonality(tags: PersonalityTag[]): void {
+  draft.value.personality = [...tags]
+  pickerOpen.value = false
+}
 
 watch(
   () => draft.value.faction,
@@ -185,15 +200,20 @@ function submit(): void {
             </select>
           </label>
         </div>
-        <label class="field">
+        <div class="field">
           <span>性格</span>
-          <input
-            v-model="draft.personality"
-            type="text"
-            maxlength="120"
-            placeholder="如：勇猛、忠诚"
-          />
-        </label>
+          <div class="personality-field">
+            <div class="personality-chips">
+              <span v-for="tag in draft.personality" :key="tag" class="personality-chip">
+                {{ tag }}
+              </span>
+              <button type="button" class="personality-add" @click="pickerOpen = true">
+                ＋ 添加性格
+              </button>
+            </div>
+            <p class="field-note">{{ personalityNote }}</p>
+          </div>
+        </div>
         <label class="field">
           <span>描述</span>
           <textarea v-model="draft.description" rows="2" placeholder="背景与经历（可选）"></textarea>
@@ -225,6 +245,13 @@ function submit(): void {
         </div>
       </div>
     </section>
+
+    <PersonalityPicker
+      v-if="pickerOpen"
+      :selected="draft.personality"
+      @confirm="applyPersonality"
+      @close="pickerOpen = false"
+    />
   </div>
 </template>
 
@@ -325,6 +352,45 @@ function submit(): void {
   margin: 0;
   font-size: 11px;
   color: #6f7d82;
+}
+
+.personality-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.personality-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.personality-chip {
+  border: 1px solid rgba(212, 178, 112, 0.55);
+  border-radius: 999px;
+  background: rgba(212, 178, 112, 0.16);
+  color: #f3e7c9;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.personality-add {
+  border: 1px dashed rgba(212, 178, 112, 0.45);
+  border-radius: 999px;
+  background: transparent;
+  color: #d4b270;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.personality-add:hover {
+  border-style: solid;
+  background: rgba(212, 178, 112, 0.12);
 }
 
 .form-error {
