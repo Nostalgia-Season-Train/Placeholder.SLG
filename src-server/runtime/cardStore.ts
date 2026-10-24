@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { CardCreateDTO, CharacterCardDTO } from '../../src-shared/protocol'
+import type { GeneralTeam } from '../../src-shared/types'
 
 const DB_PATH = resolve('src-server/data/cards.db')
 
@@ -15,6 +16,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '云谦',
     faction: 'red',
+    team: '本团',
     role: '术武将',
     position: '大臣',
     attack: '高',
@@ -27,6 +29,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '朔风',
     faction: 'red',
+    team: '本团',
     role: '武将',
     position: '无',
     attack: '高',
@@ -39,6 +42,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '烈风',
     faction: 'red',
+    team: '团1',
     role: '武将',
     position: '无',
     attack: '高',
@@ -51,6 +55,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '江叙',
     faction: 'cyan',
+    team: null,
     role: '术武将',
     position: '大臣',
     attack: '高',
@@ -63,6 +68,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '寒江',
     faction: 'cyan',
+    team: null,
     role: '武将',
     position: '无',
     attack: '高',
@@ -75,6 +81,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '听涛',
     faction: 'cyan',
+    team: null,
     role: '武将',
     position: '无',
     attack: '高',
@@ -87,6 +94,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '岫远',
     faction: 'gold',
+    team: null,
     role: '术武将',
     position: '大臣',
     attack: '高',
@@ -99,6 +107,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '狼烟',
     faction: 'gold',
+    team: null,
     role: '武将',
     position: '无',
     attack: '高',
@@ -111,6 +120,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
   {
     name: '铁衣',
     faction: 'gold',
+    team: null,
     role: '武将',
     position: '无',
     attack: '高',
@@ -132,6 +142,7 @@ function openDatabase(): DatabaseSync {
       id              TEXT PRIMARY KEY,
       name            TEXT NOT NULL,
       faction         TEXT NOT NULL,
+      team            TEXT NOT NULL DEFAULT '',
       role            TEXT NOT NULL,
       position        TEXT NOT NULL,
       attack          TEXT NOT NULL,
@@ -144,20 +155,30 @@ function openDatabase(): DatabaseSync {
       created_at      TEXT NOT NULL
     );
   `)
+  // 旧库没有团字段，启动时补齐
+  const columns = database.prepare('PRAGMA table_info(cards)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'team')) {
+    database.exec("ALTER TABLE cards ADD COLUMN team TEXT NOT NULL DEFAULT ''")
+  }
   return database
 }
 
 const db = openDatabase()
 
+const CARD_COLUMNS =
+  'id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, created_at AS createdAt'
+
 const listStatement = db.prepare(
-  'SELECT id, name, faction, role, position, attack, magic, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, created_at AS createdAt FROM cards ORDER BY created_at, id',
+  `SELECT ${CARD_COLUMNS} FROM cards ORDER BY created_at, id`,
 )
+const readStatement = db.prepare(`SELECT ${CARD_COLUMNS} FROM cards WHERE id = ?`)
 const insertStatement = db.prepare(`
-  INSERT INTO cards (id, name, faction, role, position, attack, magic, description, personality, dialogue_prompt, author_note, builtin, created_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cards (id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt, author_note, builtin, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     faction = excluded.faction,
+    team = excluded.team,
     role = excluded.role,
     position = excluded.position,
     attack = excluded.attack,
@@ -169,11 +190,19 @@ const insertStatement = db.prepare(`
     builtin = excluded.builtin,
     created_at = excluded.created_at
 `)
+const updateStatement = db.prepare(`
+  UPDATE cards SET
+    name = ?, faction = ?, team = ?, role = ?, position = ?,
+    attack = ?, magic = ?, description = ?, personality = ?,
+    dialogue_prompt = ?, author_note = ?
+  WHERE id = ?
+`)
 
 interface CardRow {
   id: string
   name: string
   faction: CharacterCardDTO['faction']
+  team: string
   role: CharacterCardDTO['role']
   position: CharacterCardDTO['position']
   attack: CharacterCardDTO['attack']
@@ -187,7 +216,21 @@ interface CardRow {
 }
 
 function toDto(row: CardRow): CharacterCardDTO {
-  return { ...row, builtin: row.builtin === 1 }
+  return {
+    id: row.id,
+    name: row.name,
+    faction: row.faction,
+    team: row.team ? (row.team as GeneralTeam) : null,
+    role: row.role,
+    position: row.position,
+    attack: row.attack,
+    magic: row.magic,
+    description: row.description,
+    personality: row.personality,
+    dialoguePrompt: row.dialoguePrompt,
+    authorNote: row.authorNote,
+    builtin: row.builtin === 1,
+  }
 }
 
 function writeCard(id: string, input: CardCreateDTO, builtin: boolean): CharacterCardDTO {
@@ -195,6 +238,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     id,
     name: input.name,
     faction: input.faction,
+    team: input.team ?? null,
     role: input.role,
     position: input.position,
     attack: input.attack,
@@ -209,6 +253,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     dto.id,
     dto.name,
     dto.faction,
+    dto.team ?? '',
     dto.role,
     dto.position,
     dto.attack,
@@ -243,6 +288,41 @@ export function listCards(): CharacterCardDTO[] {
 export function insertCard(input: CardCreateDTO): CharacterCardDTO {
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   return writeCard(id, input, false)
+}
+
+/** 全字段更新一张卡（内置卡同样可改）；卡不存在时返回 null */
+export function updateCard(id: string, input: CardCreateDTO): CharacterCardDTO | null {
+  const existing = readStatement.get(id) as CardRow | undefined
+  if (!existing) return null
+
+  updateStatement.run(
+    input.name,
+    input.faction,
+    input.team ?? '',
+    input.role,
+    input.position,
+    input.attack,
+    input.magic,
+    input.description ?? '',
+    input.personality ?? '',
+    input.dialoguePrompt ?? '',
+    input.authorNote ?? '',
+    id,
+  )
+  return toDto({
+    ...existing,
+    name: input.name,
+    faction: input.faction,
+    team: input.team ?? '',
+    role: input.role,
+    position: input.position,
+    attack: input.attack,
+    magic: input.magic,
+    description: input.description ?? '',
+    personality: input.personality ?? '',
+    dialoguePrompt: input.dialoguePrompt ?? '',
+    authorNote: input.authorNote ?? '',
+  })
 }
 
 export function closeCardStore(): void {

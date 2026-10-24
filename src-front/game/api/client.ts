@@ -3,8 +3,9 @@
  * Only transports state and commands — no game rules live here.
  */
 import type { ChatChannel } from '@shared/chat'
-import type { Faction } from '@shared/types'
+import type { Faction, AllianceConfig } from '@shared/types'
 import type {
+  AllianceUpdateDTO,
   CardCreateDTO,
   CardListDTO,
   ChatResult,
@@ -47,6 +48,17 @@ export class WorldApi {
 
   getMap(): Promise<MapDTO> {
     return request<MapDTO>('/api/map')
+  }
+
+  getAlliances(): Promise<AllianceUpdateDTO> {
+    return request<AllianceUpdateDTO>('/api/alliances')
+  }
+
+  setAlliances(alliances: AllianceConfig[]): Promise<AllianceUpdateDTO> {
+    return request<AllianceUpdateDTO>('/api/alliances', {
+      method: 'PUT',
+      body: JSON.stringify({ alliances }),
+    })
   }
 
   control(patch: ControlPatch): Promise<GameStateDTO> {
@@ -112,6 +124,13 @@ export class WorldApi {
   createCard(payload: CardCreateDTO): Promise<CardListDTO> {
     return request<CardListDTO>('/api/cards', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  updateCard(id: string, payload: CardCreateDTO): Promise<CardListDTO> {
+    return request<CardListDTO>(`/api/cards/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
       body: JSON.stringify(payload),
     })
   }

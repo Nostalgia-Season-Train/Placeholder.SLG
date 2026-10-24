@@ -13,10 +13,12 @@ import {
   FACTIONS,
   GENERAL_POSITIONS,
   GENERAL_ROLES,
+  GENERAL_TEAMS,
   STAT_GRADES,
   type Faction,
   type GeneralPosition,
   type GeneralRole,
+  type GeneralTeam,
   type StatGrade,
 } from '../src-shared/types'
 import type { ChatChannel } from '../src-shared/chat'
@@ -41,7 +43,7 @@ const runtime = new GameRuntime(hub)
 
 function setCors(response: ServerResponse): void {
   response.setHeader('Access-Control-Allow-Origin', '*')
-  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 }
 
@@ -109,6 +111,35 @@ function asGrade(value: unknown): StatGrade {
   throw new HttpError(400, '未知档位')
 }
 
+function asTeam(value: unknown): GeneralTeam | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'string' && (GENERAL_TEAMS as readonly string[]).includes(value)) {
+    return value as GeneralTeam
+  }
+  throw new HttpError(400, '未知团')
+}
+
+/** Body of POST /api/cards and PATCH /api/cards/:id */
+function readCardInput(body: Record<string, unknown>): CardCreateDTO {
+  const input: CardCreateDTO = {
+    name: asText(body.name, '名称').slice(0, 24),
+    faction: asFaction(body.faction),
+    team: asTeam(body.team),
+    role: asRole(body.role),
+    position: asPosition(body.position),
+    attack: asGrade(body.attack),
+    magic: asGrade(body.magic),
+    personality:
+      typeof body.personality === 'string' ? body.personality.trim().slice(0, 120) : '',
+  }
+  if (typeof body.description === 'string') input.description = body.description.slice(0, 2000)
+  if (typeof body.dialoguePrompt === 'string') {
+    input.dialoguePrompt = body.dialoguePrompt.slice(0, 2000)
+  }
+  if (typeof body.authorNote === 'string') input.authorNote = body.authorNote.slice(0, 2000)
+  return input
+}
+
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
   setCors(response)
   if (request.method === 'OPTIONS') {
@@ -150,6 +181,23 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     return
   }
 
+  if (method === 'GET' && path === '/api/alliances') {
+    json(response, 200, { alliances: runtime.world().alliances })
+    return
+  }
+
+  if (method === 'PUT' && path === '/api/alliances') {
+    const body = await readJson(request)
+    try {
+      json(response, 200, { alliances: runtime.setAlliances(body.alliances) })
+    } catch (error) {
+      throw error instanceof HttpError
+        ? error
+        : new HttpError(400, error instanceof Error ? error.message : '同盟配置无效')
+    }
+    return
+  }
+
   if (method === 'GET' && path === '/api/llm') {
     json(response, 200, runtime.world().llm)
     return
@@ -185,7 +233,6 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     if (typeof body.eventLimit === 'number') patch.eventLimit = body.eventLimit
     if (typeof body.autoCommand === 'boolean') patch.autoCommand = body.autoCommand
     if (typeof body.autoInterval === 'number') patch.autoInterval = body.autoInterval
-    if (body.faction !== undefined) patch.faction = asFaction(body.faction)
     json(response, 200, runtime.control(patch))
     return
   }
@@ -243,23 +290,20 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   }
 
   if (method === 'POST' && path === '/api/cards') {
-    const body = await readJson(request)
-    const input: CardCreateDTO = {
-      name: asText(body.name, '名称').slice(0, 24),
-      faction: asFaction(body.faction),
-      role: asRole(body.role),
-      position: asPosition(body.position),
-      attack: asGrade(body.attack),
-      magic: asGrade(body.magic),
-      personality:
-        typeof body.personality === 'string' ? body.personality.trim().slice(0, 120) : '',
+    json(response, 200, runtime.createCard(readCardInput(await readJson(request))))
+    return
+  }
+
+  const cardMatch = /^\/api\/cards\/([^/]+)$/.exec(path)
+  if (method === 'PATCH' && cardMatch) {
+    const id = decodeURIComponent(cardMatch[1] ?? '')
+    try {
+      json(response, 200, runtime.editCard(id, readCardInput(await readJson(request))))
+    } catch (error) {
+      throw error instanceof HttpError
+        ? error
+        : new HttpError(404, error instanceof Error ? error.message : '角色不存在')
     }
-    if (typeof body.description === 'string') input.description = body.description.slice(0, 2000)
-    if (typeof body.dialoguePrompt === 'string') {
-      input.dialoguePrompt = body.dialoguePrompt.slice(0, 2000)
-    }
-    if (typeof body.authorNote === 'string') input.authorNote = body.authorNote.slice(0, 2000)
-    json(response, 200, runtime.createCard(input))
     return
   }
 

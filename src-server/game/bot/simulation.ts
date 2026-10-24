@@ -16,9 +16,8 @@ import {
   type WorldTerrain,
 } from './terrain'
 import {
-  FACTION_NAMES,
-  FACTIONS,
   ORDER_LABELS,
+  type AllianceConfig,
   type BaseCity,
   type BotOrder,
   type BotStance,
@@ -100,8 +99,9 @@ function cloneGeneral(general: GeneralState): GeneralState {
   const maxHp = general.maxHp ?? maxHpOf(general.power, role)
   return {
     ...general,
-    // 旧存档没有职位字段，按「无」处理
+    // 旧存档没有职位与团字段，按「无职位、无团」处理
     position: general.position ?? '无',
+    team: general.team ?? null,
     role,
     maxHp,
     hp: general.hp ?? maxHp,
@@ -123,6 +123,7 @@ export class MarchSimulation {
   readonly terrain: WorldTerrain
   private readonly rng: SeedRandom
   private readonly random: () => number
+  private readonly alliances: AllianceConfig[]
   private readonly cities: BaseCity[]
   private readonly generals: GeneralState[]
   private readonly occupation = new Map<string, Faction>()
@@ -132,10 +133,11 @@ export class MarchSimulation {
   private occupationVersion = 0
   private eventLimit = 14
 
-  constructor(map: MapData, seed: number, restore?: SimSaveState) {
+  constructor(map: MapData, seed: number, alliances: AllianceConfig[], restore?: SimSaveState) {
     this.terrain = buildTerrain(map)
     this.rng = createSeedRandom((seed >>> 0) || 1)
     this.random = () => this.rng.next()
+    this.alliances = alliances.map((alliance) => ({ ...alliance }))
 
     if (restore) {
       this.cities = restore.cities.map((city) => ({ ...city, coord: { ...city.coord } }))
@@ -251,11 +253,11 @@ export class MarchSimulation {
   /* Setup                                                               */
   /* ------------------------------------------------------------------ */
 
-  /** One home city per faction, placed at the spawn site inside its region */
+  /** One home city per enabled alliance, in configuration order against map.spawns */
   private createCities(map: MapData): BaseCity[] {
     const result: BaseCity[] = []
 
-    FACTIONS.forEach((faction, factionIndex) => {
+    this.alliances.forEach((alliance, factionIndex) => {
       const anchor = map.spawns[factionIndex]
       const coord = anchor
         ? getTile(this.terrain, anchor)?.passable
@@ -264,9 +266,9 @@ export class MarchSimulation {
         : null
       if (!coord) return
 
-      this.occupation.set(coordKey(coord), faction)
-      result.push({ faction, coord: { ...coord }, name: `${FACTION_NAMES[faction]}主城` })
-      this.log(faction, `${FACTION_NAMES[faction]}主城设立于（${coord.q},${coord.r}）`)
+      this.occupation.set(coordKey(coord), alliance.faction)
+      result.push({ faction: alliance.faction, coord: { ...coord }, name: `${alliance.name}主城` })
+      this.log(alliance.faction, `${alliance.name}主城设立于（${coord.q},${coord.r}）`)
     })
 
     if (result.length > 0) this.occupationVersion += 1
@@ -301,6 +303,7 @@ export class MarchSimulation {
       name: card.name,
       faction: card.faction,
       position: card.position,
+      team: card.team ?? null,
       role: card.role,
       coord: { ...spawn },
       power,

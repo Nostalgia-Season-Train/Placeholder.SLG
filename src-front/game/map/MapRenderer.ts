@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { FACTION_NAMES, type BaseCity, type Faction, type GeneralState } from '@shared/types'
+import { allianceNameOf, type BaseCity, type Faction, type GeneralState } from '@shared/types'
 import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
@@ -68,6 +68,8 @@ export class MapRenderer {
   private riverLayer: RiverLayer | null = null
   private agentLayer: AgentLayer | null = null
   private cityLayer: CityLayer | null = null
+  /** 开局配置的同盟名称与关系，用于悬停文案 */
+  private diplomacy: Diplomacy | null = null
 
   private resizeObserver: ResizeObserver | null = null
   private dragging = false
@@ -174,23 +176,32 @@ export class MapRenderer {
 
   /** Sync general positions, paths and targets */
   setAgents(generals: GeneralState[], diplomacy?: Diplomacy, tickMs?: number): void {
+    if (diplomacy) this.diplomacy = diplomacy
     this.agentLayer?.setAgents(generals, diplomacy, tickMs)
   }
 
   /** Sync faction home cities */
   setCities(cities: BaseCity[], diplomacy?: Diplomacy): void {
+    if (diplomacy) this.diplomacy = diplomacy
     this.cityLayer?.setCities(cities, diplomacy)
   }
 
   /** Sync tile ownership */
   setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
+    this.diplomacy = diplomacy
     this.agentLayer?.setOccupations(occupation, diplomacy)
   }
 
   /** Recolor existing overlays and tokens after the player faction changes */
   setDiplomacy(diplomacy: Diplomacy): void {
+    this.diplomacy = diplomacy
     this.agentLayer?.setDiplomacy(diplomacy)
     this.cityLayer?.setDiplomacy(diplomacy)
+  }
+
+  /** 悬停文案使用开局配置的同盟名称 */
+  private cityFactionName(faction: Faction): string {
+    return allianceNameOf(this.diplomacy?.names, faction)
   }
 
   /** Clear the simulation presentation */
@@ -439,7 +450,7 @@ export class MapRenderer {
         r: city.coord.r,
         level: tile.level,
         name: city.name,
-        desc: `${FACTION_NAMES[city.faction]}小队出发地`,
+        desc: `${this.cityFactionName(city.faction)}小队出发地`,
         height: tile.height,
         isBank: false,
         isWall: false,
@@ -447,7 +458,7 @@ export class MapRenderer {
         city: {
           name: city.name,
           faction: city.faction,
-          factionName: FACTION_NAMES[city.faction],
+          factionName: this.cityFactionName(city.faction),
         },
       })
       return

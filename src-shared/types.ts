@@ -25,6 +25,43 @@ export const FACTION_COLORS: Record<Faction, number> = {
   gold: 0xd9b23c,
 }
 
+/** 同盟与玩家的关系；每局恰有一个我方 */
+export type AllianceRelation = 'self' | 'friendly' | 'hostile'
+
+export const ALLIANCE_RELATIONS: AllianceRelation[] = ['self', 'friendly', 'hostile']
+
+export const ALLIANCE_RELATION_LABELS: Record<AllianceRelation, string> = {
+  self: '我方',
+  friendly: '友方',
+  hostile: '敌方',
+}
+
+/** 一个同盟：faction 为内部槽位，名称与关系由开局设置决定 */
+export interface AllianceConfig {
+  faction: Faction
+  name: string
+  relation: AllianceRelation
+}
+
+export const DEFAULT_ALLIANCES: AllianceConfig[] = [
+  { faction: 'red', name: '北庭', relation: 'self' },
+  { faction: 'cyan', name: '东川', relation: 'friendly' },
+  { faction: 'gold', name: '西陵', relation: 'hostile' },
+]
+
+/** 运行期显示用的同盟名称表；缺省回落到内置名称 */
+export type AllianceNames = Partial<Record<Faction, string>>
+
+export function allianceNameOf(names: AllianceNames | undefined, faction: Faction): string {
+  return names?.[faction] ?? FACTION_NAMES[faction]
+}
+
+export function allianceNamesOf(alliances: AllianceConfig[]): AllianceNames {
+  const names: AllianceNames = {}
+  for (const alliance of alliances) names[alliance.faction] = alliance.name
+  return names
+}
+
 export interface Coord {
   q: number
   r: number
@@ -73,6 +110,8 @@ export interface GeneralState {
   faction: Faction
   /** 角色属性中的职位；用于地图与聊天统一的显示名 */
   position: GeneralPosition
+  /** 角色属性中的团编制；友盟与敌盟不设团 */
+  team: GeneralTeam | null
   /** 角色属性中的定位；影响兵力与普攻强度 */
   role: GeneralRole
   coord: Coord
@@ -131,14 +170,24 @@ export type GeneralRole = (typeof GENERAL_ROLES)[number]
 export const GENERAL_POSITIONS = ['无', '团长', '大臣'] as const
 export type GeneralPosition = (typeof GENERAL_POSITIONS)[number]
 
+/** 团编制；本团为玩家所在的核心团，团1 为下属团 */
+export const GENERAL_TEAMS = ['本团', '团1'] as const
+export type GeneralTeam = (typeof GENERAL_TEAMS)[number]
+
 /** Coarse stat grades used by character cards */
 export const STAT_GRADES = ['低', '中', '高'] as const
 export type StatGrade = (typeof STAT_GRADES)[number]
 
-/** 统一显示名：【同盟名】职务·角色；职位为「无」时省略职务段 */
-export function formatUnitName(faction: Faction, position: GeneralPosition, name: string): string {
-  const alliance = FACTION_NAMES[faction]
-  return position === '无' ? `【${alliance}】${name}` : `【${alliance}】${position}·${name}`
+/** 统一显示名：【同盟名】团·职务·角色；团与职务缺省时省略对应段 */
+export function formatUnitName(
+  names: AllianceNames | undefined,
+  faction: Faction,
+  team: GeneralTeam | null,
+  position: GeneralPosition,
+  name: string,
+): string {
+  const parts = [team, position === '无' ? null : position, name].filter(Boolean)
+  return `【${allianceNameOf(names, faction)}】${parts.join('·')}`
 }
 
 /** Character-card fields the simulation needs to place a unit on the map */
@@ -146,6 +195,7 @@ export interface CardSpawn {
   id: string
   name: string
   faction: Faction
+  team: GeneralTeam | null
   role: GeneralRole
   position: GeneralPosition
   attack: StatGrade

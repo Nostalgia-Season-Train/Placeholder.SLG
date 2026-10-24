@@ -5,7 +5,7 @@
  */
 import * as THREE from 'three'
 import { FACTION_COLORS, type BaseCity } from '@shared/types'
-import { relationStyleOf, type Diplomacy } from '../bot/diplomacy'
+import { diplomacySignature, relationStyleOf, type Diplomacy } from '../bot/diplomacy'
 import type { WorldPosition } from './AgentLayer'
 
 interface CityToken {
@@ -32,7 +32,7 @@ export class CityLayer {
     if (diplomacy) this.diplomacy = diplomacy
 
     const signature = [
-      this.diplomacy?.playerFaction ?? '',
+      this.diplomacy ? diplomacySignature(this.diplomacy) : '',
       ...cities.map((city) => `${city.faction}:${city.coord.q},${city.coord.r}`),
     ].join('|')
     if (signature === this.signature) return
@@ -43,7 +43,9 @@ export class CityLayer {
   }
 
   setDiplomacy(diplomacy: Diplomacy): void {
-    if (this.diplomacy?.playerFaction === diplomacy.playerFaction) return
+    if (this.diplomacy && diplomacySignature(this.diplomacy) === diplomacySignature(diplomacy)) {
+      return
+    }
     this.diplomacy = diplomacy
     this.signature = ''
   }

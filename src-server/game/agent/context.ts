@@ -4,7 +4,8 @@
  */
 import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
 import {
-  FACTION_NAMES,
+  allianceNameOf,
+  type AllianceNames,
   type Coord,
   type Faction,
   type GeneralState,
@@ -29,6 +30,8 @@ export interface ContextDeps {
   snapshot: SimSnapshot
   terrain: WorldTerrain
   playerFaction: Faction
+  /** 开局配置的同盟名称表 */
+  allianceNames: AllianceNames
 }
 
 /** 频道上下文的裁剪上限，见《角色行动》5.3 */
@@ -63,8 +66,9 @@ export function buildActorContext(
   return {
     角色: {
       名称: card.name,
-      同盟: FACTION_NAMES[card.faction],
+      同盟: allianceNameOf(deps.allianceNames, card.faction),
       职位: card.position,
+      团: card.team ?? '',
       定位: card.role,
       性格: card.personality,
       描述: card.description,
@@ -86,8 +90,8 @@ export function buildActorContext(
       回合: snapshot.round,
       己方地块数: snapshot.factionCounts[card.faction],
       己方单位: ownGenerals(card.faction, snapshot).map(unitLine),
-      周边敌方单位: nearbyEnemies(card.faction, snapshot),
-      可占领候选: candidates(card.faction, snapshot, deps.terrain),
+      周边敌方单位: nearbyEnemies(card.faction, snapshot, deps.allianceNames),
+      可占领候选: candidates(card.faction, snapshot, deps.terrain, deps.allianceNames),
     },
     本轮触发: {
       类型: TRIGGER_LABELS[trigger.kind],
@@ -169,7 +173,11 @@ function factionCentroid(faction: Faction, snapshot: SimSnapshot): Coord {
   return count === 0 ? { q: 0, r: 0 } : { q: Math.round(q / count), r: Math.round(r / count) }
 }
 
-function nearbyEnemies(faction: Faction, snapshot: SimSnapshot): unknown[] {
+function nearbyEnemies(
+  faction: Faction,
+  snapshot: SimSnapshot,
+  names: AllianceNames,
+): unknown[] {
   const centroid = factionCentroid(faction, snapshot)
   return snapshot.generals
     .filter((general) => general.faction !== faction)
@@ -179,11 +187,16 @@ function nearbyEnemies(faction: Faction, snapshot: SimSnapshot): unknown[] {
     .slice(0, ENEMY_LIMIT)
     .map(
       (entry) =>
-        `${entry.general.name}(${FACTION_NAMES[entry.general.faction]}) (${entry.general.coord.q},${entry.general.coord.r}) ${entry.general.status} 战力${entry.general.power} 兵力${entry.general.hp}/${entry.general.maxHp}`,
+        `${entry.general.name}(${allianceNameOf(names, entry.general.faction)}) (${entry.general.coord.q},${entry.general.coord.r}) ${entry.general.status} 战力${entry.general.power} 兵力${entry.general.hp}/${entry.general.maxHp}`,
     )
 }
 
-function candidates(faction: Faction, snapshot: SimSnapshot, terrain: WorldTerrain): unknown[] {
+function candidates(
+  faction: Faction,
+  snapshot: SimSnapshot,
+  terrain: WorldTerrain,
+  names: AllianceNames,
+): unknown[] {
   const centroid = factionCentroid(faction, snapshot)
   return terrain.capturable
     .filter((tile) => snapshot.occupation.get(coordKey(tile.coord)) !== faction)
@@ -199,7 +212,7 @@ function candidates(faction: Faction, snapshot: SimSnapshot, terrain: WorldTerra
     .sort((a, b) => b.score - a.score)
     .slice(0, CANDIDATE_LIMIT)
     .map((entry) => {
-      const owner = entry.owner ? FACTION_NAMES[entry.owner] : '无主'
+      const owner = entry.owner ? allianceNameOf(names, entry.owner) : '无主'
       return `(${entry.tile.coord.q},${entry.tile.coord.r})${entry.tile.name} L${entry.tile.level} 值${entry.tile.value} ${owner} 评${Math.round(entry.score)}`
     })
 }

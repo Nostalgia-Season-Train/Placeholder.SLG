@@ -8,9 +8,10 @@
 import { axialToWorld } from '../../../src-shared/map/hex'
 import { coordKey, getTile, hexDistance, type TileInfo, type WorldTerrain } from '../bot/terrain'
 import {
-  FACTION_NAMES,
+  allianceNameOf,
   FACTIONS,
   formatUnitName,
+  type AllianceNames,
   type BotStance,
   type Coord,
   type Faction,
@@ -56,6 +57,8 @@ export interface ActorDeps {
   llm(): LlmClient | null
   snapshot(): SimSnapshot
   playerFaction(): Faction
+  /** 开局配置的同盟名称表 */
+  allianceNames(): AllianceNames
   autoEnabled(): boolean
   autoInterval(): number
   /** 该角色是否为所属同盟的发言人，只有发言人按自身排期在世界频道发声 */
@@ -214,7 +217,13 @@ export class CharacterAgent {
     this.card = card
     this.id = card.id
     this.generalId = card.position === '无' ? `card-${card.id}` : null
-    this.author = formatUnitName(card.faction, card.position, card.name)
+    this.author = formatUnitName(
+      deps.allianceNames(),
+      card.faction,
+      card.team ?? null,
+      card.position,
+      card.name,
+    )
     if (saved) this.restore(saved)
   }
 
@@ -354,6 +363,7 @@ export class CharacterAgent {
       snapshot,
       terrain: this.deps.terrain,
       playerFaction: this.deps.playerFaction(),
+      allianceNames: this.deps.allianceNames(),
     })
 
     const llm = this.deps.llm()
@@ -396,9 +406,11 @@ export class CharacterAgent {
 
   private identity(): string {
     const card = this.card
-    const position = card.position === '无' ? '' : `${card.position}·`
+    const parts = [card.team, card.position === '无' ? null : card.position, card.name].filter(
+      Boolean,
+    )
     return [
-      `你是【${FACTION_NAMES[card.faction]}】${position}${card.name}，定位${card.role}。`,
+      `你是【${allianceNameOf(this.deps.allianceNames(), card.faction)}】${parts.join('·')}，定位${card.role}。`,
       card.description ? `描述：${card.description}` : '',
       card.personality ? `性格：${card.personality}` : '',
       card.dialoguePrompt ? `对话风格：${card.dialoguePrompt}` : '',
@@ -613,6 +625,7 @@ export class CharacterAgent {
 
   private localAdvice(snapshot: SimSnapshot): string {
     const faction = this.card.faction
+    const names = this.deps.allianceNames()
     const own = snapshot.factionCounts[faction]
     const leader = FACTIONS.reduce((best, item) =>
       snapshot.factionCounts[item] > snapshot.factionCounts[best] ? item : best,
@@ -628,18 +641,21 @@ export class CharacterAgent {
       ? `建议优先夺取${target.name}（${target.coord.q},${target.coord.r}）。`
       : '建议稳守现有地块。'
     const position =
-      leader === faction ? '我方暂时领先' : `${FACTION_NAMES[leader]}以 ${snapshot.factionCounts[leader]} 块领先`
+      leader === faction
+        ? '我方暂时领先'
+        : `${allianceNameOf(names, leader)}以 ${snapshot.factionCounts[leader]} 块领先`
 
-    return `${FACTION_NAMES[faction]}现有 ${own} 块地，${position}；${active} 名 Bot 在行动。${heading}`
+    return `${allianceNameOf(names, faction)}现有 ${own} 块地，${position}；${active} 名 Bot 在行动。${heading}`
   }
 
   private localBroadcast(snapshot: SimSnapshot): string {
     const faction = this.card.faction
+    const name = allianceNameOf(this.deps.allianceNames(), faction)
     const own = snapshot.factionCounts[faction]
     const lines = [
-      `${FACTION_NAMES[faction]}已控 ${own} 块地，旗子插稳了。`,
-      `${FACTION_NAMES[faction]}的 Bot 已经出发，别挡路。`,
-      `这片地，${FACTION_NAMES[faction]}要一半。`,
+      `${name}已控 ${own} 块地，旗子插稳了。`,
+      `${name}的 Bot 已经出发，别挡路。`,
+      `这片地，${name}要一半。`,
       `世界频道没人应答？那就用兵说话。`,
     ]
     return lines[(snapshot.round + own) % lines.length] ?? lines[0]!

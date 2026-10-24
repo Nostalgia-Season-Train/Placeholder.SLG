@@ -3,7 +3,7 @@
  * Types only — importing this module never pulls runtime code.
  */
 import type { ChatChannel, ChatMessage } from './chat'
-import type { CardSpawn, Faction, SimSaveState, SimSnapshot } from './types'
+import type { CardSpawn, Faction, AllianceConfig, SimSaveState, SimSnapshot } from './types'
 import type { MapData } from './map/MapGenerator'
 
 /** MapData without the runtime lookup table; the client rebuilds it from tiles */
@@ -47,6 +47,8 @@ export interface GameStateDTO {
   autoCommand: boolean
   autoInterval: number
   faction: Faction
+  /** 我方同盟，等于配置中 relation 为 self 的同盟 */
+  playerFaction: Faction
   seed: number
   llmConfigured: boolean
   llmError: string | null
@@ -54,10 +56,17 @@ export interface GameStateDTO {
 
 export interface WorldDTO {
   state: GameStateDTO
+  /** 当前开局配置的同盟列表，按出生区顺序排列 */
+  alliances: AllianceConfig[]
   map: MapDTO
   snapshot: SnapshotDTO
   chat: ChatLog
   llm: LlmStatusDTO
+}
+
+/** PUT /api/alliances 的请求体 */
+export interface AllianceUpdateDTO {
+  alliances: AllianceConfig[]
 }
 
 export interface ControlPatch {
@@ -119,6 +128,8 @@ export interface WorldSaveDTO {
   round: number
   /** LLM 连接状态属于运行时状态，不写入存档 */
   state: Omit<GameStateDTO, 'llmConfigured' | 'llmError'>
+  /** 开局时保存的同盟配置；旧存档缺省按内置三同盟 */
+  alliances?: AllianceConfig[]
   sim: SimSaveState
   chat: ChatLog
   /** 旧存档没有该段，读档后所有角色重新随机排期 */

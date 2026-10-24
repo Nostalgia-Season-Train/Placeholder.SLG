@@ -8,7 +8,12 @@
 import { loadPresetMap } from '../../src-shared/map/presetMap'
 import type { MapData } from '../../src-shared/map/MapGenerator'
 import { MarchSimulation, type SimSignal } from '../game/bot/simulation'
-import { FACTIONS, type BotOrder, type Faction } from '../../src-shared/types'
+import {
+  DEFAULT_ALLIANCES,
+  type AllianceConfig,
+  type BotOrder,
+  type Faction,
+} from '../../src-shared/types'
 import { CharacterAgent, type ActorDeps, type AgentOrderDraft } from '../game/agent/actor'
 import { ChannelLog } from '../game/agent/channel'
 import { LlmSemaphore, RoundGate, SpeechQuota, type ActorKeypoint } from '../game/agent/scheduler'
@@ -33,7 +38,13 @@ import type {
   WorldSaveDTO,
 } from '../../src-shared/protocol'
 import { createLlmClient, llmError, llmStatus, testLlmConnection, updateLlm } from './llmSettings'
-import { insertCard, listCards } from './cardStore'
+import { insertCard, listCards, updateCard } from './cardStore'
+import {
+  getAlliances,
+  allianceNames,
+  playerFactionOf,
+  updateAlliances,
+} from './worldSettings'
 import {
   deleteSave,
   listSaves,
@@ -74,7 +85,7 @@ export class GameRuntime {
     eventLimit: 14,
     autoCommand: true,
     autoInterval: 10,
-    faction: 'red',
+    faction: playerFactionOf(getAlliances()),
   }
 
   private worldVersion = 1
@@ -84,7 +95,10 @@ export class GameRuntime {
 
   constructor(private readonly hub: SseHub) {
     const restored = readAutoSave()
-    if (restored) this.applySaveState(restored)
+    if (restored) {
+      this.applyAllianceConfig(restored.alliances)
+      this.applySaveState(restored)
+    }
     this.buildWorld(restored)
     if (restored) console.log(`[slg] 已恢复自动续档：第 ${restored.round} 回合`)
     this.schedule()
@@ -97,6 +111,7 @@ export class GameRuntime {
   world(): WorldDTO {
     return {
       state: this.state(),
+      alliances: getAlliances(),
       map: this.mapDto(),
       snapshot: this.snapshot(),
       chat: this.chat(),
@@ -122,6 +137,7 @@ export class GameRuntime {
       autoCommand: this.config.autoCommand,
       autoInterval: this.config.autoInterval,
       faction: this.config.faction,
+      playerFaction: playerFactionOf(getAlliances()),
       seed: this.map.seed,
       llmConfigured: llmStatus().configured,
       llmError: llmError(),
@@ -154,7 +170,6 @@ export class GameRuntime {
     if (typeof patch.autoInterval === 'number' && Number.isFinite(patch.autoInterval)) {
       this.config.autoInterval = Math.min(100, Math.max(1, Math.round(patch.autoInterval)))
     }
-    if (patch.faction && FACTIONS.includes(patch.faction)) this.config.faction = patch.faction
 
     this.reschedule()
     const state = this.state()
@@ -182,6 +197,14 @@ export class GameRuntime {
     this.llm = createLlmClient()
     this.hub.broadcast({ type: 'state', state: this.state() })
     return status
+  }
+
+  /** 保存开局同盟配置；世界只在「开始游戏」时按该配置重建 */
+  setAlliances(input: unknown): AllianceConfig[] {
+    const next = updateAlliances(input)
+    this.config.faction = playerFactionOf(next)
+    this.hub.broadcast({ type: 'state', state: this.state() })
+    return next
   }
 
   /** 主动探活：真实接口不可达时把原因带回界面 */
@@ -213,6 +236,7 @@ export class GameRuntime {
     this.stopTimer()
     this.stopActors()
 
+    this.applyAllianceConfig(save.alliances)
     this.applySaveState(save)
     this.buildWorld(save)
     this.worldVersion += 1
@@ -255,8 +279,10 @@ export class GameRuntime {
         autoCommand: this.config.autoCommand,
         autoInterval: this.config.autoInterval,
         faction: this.config.faction,
+        playerFaction: this.config.faction,
         seed: this.map.seed,
       },
+      alliances: getAlliances(),
       sim,
       chat: this.saveChat(),
       actors: this.actors.map((actor) => actor.toSave()),
@@ -279,6 +305,12 @@ export class GameRuntime {
     this.actors.push(actor)
     actor.start()
     if (spawned) this.sendTick()
+    return this.cardList()
+  }
+
+  /** 编辑一张角色卡；改动在下一局开始时生效 */
+  editCard(id: string, input: CardCreateDTO): CardListDTO {
+    if (!updateCard(id, input)) throw new Error('角色不存在')
     return this.cardList()
   }
 
@@ -349,7 +381,7 @@ export class GameRuntime {
 
   private buildWorld(save: WorldSaveDTO | null): void {
     const map = loadPresetMap()
-    const sim = new MarchSimulation(map, this.simSeed(map), save?.sim)
+    const sim = new MarchSimulation(map, this.simSeed(map), getAlliances(), save?.sim)
     sim.setEventLimit(this.config.eventLimit)
     if (!save) {
       for (const card of listCards()) sim.spawnFromCard(card)
@@ -405,6 +437,7 @@ export class GameRuntime {
       llm: () => this.llm,
       snapshot: () => this.sim.snapshot(),
       playerFaction: () => this.config.faction,
+      allianceNames: () => allianceNames(),
       autoEnabled: () => this.config.autoCommand,
       autoInterval: () => this.config.autoInterval,
       isSpokesperson: (cardId) => {
@@ -429,8 +462,19 @@ export class GameRuntime {
     this.config.eventLimit = state.eventLimit
     this.config.autoCommand = state.autoCommand
     this.config.autoInterval = state.autoInterval
-    this.config.faction = state.faction
+    // 玩家阵营由同盟配置决定，不跟随旧存档里的切换值
+    this.config.faction = playerFactionOf(getAlliances())
     this.worldVersion = state.worldVersion
+  }
+
+  /** 读档或续档时套用存档内的同盟配置；旧存档缺省按内置三同盟 */
+  private applyAllianceConfig(list: AllianceConfig[] | undefined): void {
+    try {
+      updateAlliances(list ?? DEFAULT_ALLIANCES)
+    } catch (error) {
+      console.warn('[slg] 存档中的同盟配置无效，沿用当前配置：', error)
+    }
+    this.config.faction = playerFactionOf(getAlliances())
   }
 
   private simSeed(map: MapData): number {
@@ -443,10 +487,12 @@ export class GameRuntime {
 
   /** 每个同盟的发言人：职位最高的角色（大臣优先，其次团长），世界频道与玩家发言都由其回应 */
   private spokespersonIds(): Map<Faction, string> {
+    const enabled = new Set(getAlliances().map((alliance) => alliance.faction))
     const best = new Map<Faction, { id: string; rank: number }>()
     const rank = (position: string): number =>
       position === '大臣' ? 0 : position === '团长' ? 1 : 2
     for (const card of listCards()) {
+      if (!enabled.has(card.faction)) continue
       const current = best.get(card.faction)
       if (!current || rank(card.position) < current.rank) {
         best.set(card.faction, { id: card.id, rank: rank(card.position) })
@@ -469,7 +515,9 @@ export class GameRuntime {
   ): void {
     let target: CharacterAgent | undefined
     if (channel === 'world') {
-      const others = FACTIONS.filter((item) => item !== faction)
+      const others = getAlliances()
+        .map((alliance) => alliance.faction)
+        .filter((item) => item !== faction)
       const responder = others[(round + text.length) % Math.max(1, others.length)] ?? faction
       target = this.spokespersonOf(responder)
     } else {

@@ -6,6 +6,7 @@
 import * as THREE from 'three'
 import { FACTION_COLORS, formatUnitName, type Faction, type GeneralState } from '@shared/types'
 import {
+  diplomacySignature,
   relationStyleOf,
   type Diplomacy,
   type RelationStyle,
@@ -86,6 +87,7 @@ export class AgentLayer {
   private borderMesh: THREE.InstancedMesh | null = null
   private occupation: Map<string, Faction> | null = null
   private diplomacy: Diplomacy | null = null
+  private diplomacySignature = ''
   private elapsed = 0
   /** 一个 Tick 的时长（秒），由后端推演节拍驱动 */
   private tickSeconds = DEFAULT_TICK_MS / 1000
@@ -96,8 +98,9 @@ export class AgentLayer {
 
   setAgents(generals: GeneralState[], diplomacy?: Diplomacy, tickMs?: number): void {
     if (tickMs && Number.isFinite(tickMs)) this.tickSeconds = Math.max(0.1, tickMs / 1000)
-    if (diplomacy && this.diplomacy?.playerFaction !== diplomacy.playerFaction) {
+    if (diplomacy && this.diplomacySignature !== diplomacySignature(diplomacy)) {
       this.diplomacy = diplomacy
+      this.diplomacySignature = diplomacySignature(diplomacy)
       this.rebuildOccupation()
     }
 
@@ -121,8 +124,10 @@ export class AgentLayer {
   }
 
   setDiplomacy(diplomacy: Diplomacy): void {
-    if (this.diplomacy?.playerFaction === diplomacy.playerFaction) return
+    const signature = diplomacySignature(diplomacy)
+    if (this.diplomacySignature === signature) return
     this.diplomacy = diplomacy
+    this.diplomacySignature = signature
     this.rebuildOccupation()
   }
 
@@ -130,6 +135,7 @@ export class AgentLayer {
   setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
     this.occupation = new Map(occupation)
     this.diplomacy = diplomacy
+    this.diplomacySignature = diplomacySignature(diplomacy)
     this.rebuildOccupation()
   }
 
@@ -436,7 +442,13 @@ export class AgentLayer {
 
   /** 头顶名称与世界频道作者名同格式、同配色；下方附兵力条 */
   private refreshLabel(token: AgentToken, general: GeneralState): void {
-    const text = formatUnitName(general.faction, general.position ?? '无', general.name)
+    const text = formatUnitName(
+      this.diplomacy?.names,
+      general.faction,
+      general.team ?? null,
+      general.position ?? '无',
+      general.name,
+    )
     const color = this.styleFor(general.faction).fill
     const maxHp = general.maxHp ?? 0
     const ratio = maxHp > 0 ? Math.round(((general.hp ?? maxHp) / maxHp) * 100) / 100 : 1

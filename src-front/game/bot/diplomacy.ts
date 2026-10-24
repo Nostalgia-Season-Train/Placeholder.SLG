@@ -1,24 +1,20 @@
 /**
  * Diplomacy layer for map coloring.
- * A tile or token is painted by its owner's relation to the player's faction:
- * self = green, ally = blue, every other relation = red with an optional frame.
+ * A tile or token is painted by its alliance's relation to the player's side:
+ * self = green, friendly = blue, hostile = red. Names come from the start-up
+ * alliance configuration, never from hard-coded faction labels.
  */
-import type { Faction } from '@shared/types'
+import {
+  ALLIANCE_RELATION_LABELS,
+  type AllianceConfig,
+  type AllianceNames,
+  type AllianceRelation,
+  type Faction,
+} from '@shared/types'
 
-export type FactionRelation =
-  | 'self'
-  | 'ally'
-  | 'neutral'
-  | 'hostileAlliance'
-  | 'friendlyAlliance'
+export type FactionRelation = AllianceRelation
 
-export const RELATION_LABELS: Record<FactionRelation, string> = {
-  self: '我方核心团',
-  ally: '我方同盟',
-  neutral: '非友方非敌方',
-  hostileAlliance: '敌方同盟',
-  friendlyAlliance: '友方同盟',
-}
+export const RELATION_LABELS: Record<FactionRelation, string> = ALLIANCE_RELATION_LABELS
 
 export interface RelationStyle {
   fill: number
@@ -28,26 +24,36 @@ export interface RelationStyle {
 
 export const RELATION_STYLES: Record<FactionRelation, RelationStyle> = {
   self: { fill: 0x4fb477, border: null },
-  ally: { fill: 0x3f7fd6, border: null },
-  neutral: { fill: 0xc84b3c, border: null },
-  hostileAlliance: { fill: 0xc84b3c, border: 0xff4d4d },
-  friendlyAlliance: { fill: 0xc84b3c, border: 0x4d8dff },
+  friendly: { fill: 0x3f7fd6, border: null },
+  hostile: { fill: 0xc84b3c, border: null },
 }
 
 export interface Diplomacy {
   playerFaction: Faction
   relations: Record<Faction, FactionRelation>
+  /** 开局配置的同盟名称表 */
+  names: AllianceNames
 }
 
-/** Each playable faction sees a different diplomatic layout, covering all five styles */
-const RELATION_MATRIX: Record<Faction, Record<Faction, FactionRelation>> = {
-  red: { red: 'self', cyan: 'ally', gold: 'hostileAlliance' },
-  cyan: { red: 'neutral', cyan: 'self', gold: 'ally' },
-  gold: { red: 'ally', cyan: 'friendlyAlliance', gold: 'self' },
-}
+/** 未启用的槽位不出现城池与单位，统一按敌方色兜底 */
+const DISABLED_RELATION: FactionRelation = 'hostile'
 
-export function createDiplomacy(playerFaction: Faction): Diplomacy {
-  return { playerFaction, relations: { ...RELATION_MATRIX[playerFaction] } }
+export function createDiplomacy(alliances: AllianceConfig[]): Diplomacy {
+  const relations: Record<Faction, FactionRelation> = {
+    red: DISABLED_RELATION,
+    cyan: DISABLED_RELATION,
+    gold: DISABLED_RELATION,
+  }
+  const names: AllianceNames = {}
+
+  for (const alliance of alliances) {
+    relations[alliance.faction] = alliance.relation
+    names[alliance.faction] = alliance.name
+  }
+
+  const playerFaction =
+    alliances.find((alliance) => alliance.relation === 'self')?.faction ?? 'red'
+  return { playerFaction, relations, names }
 }
 
 export function relationOf(diplomacy: Diplomacy, faction: Faction): FactionRelation {
@@ -56,4 +62,9 @@ export function relationOf(diplomacy: Diplomacy, faction: Faction): FactionRelat
 
 export function relationStyleOf(diplomacy: Diplomacy, faction: Faction): RelationStyle {
   return RELATION_STYLES[relationOf(diplomacy, faction)]
+}
+
+/** 名称或关系变化都需要重绘，用签名判断是否换了一份配置 */
+export function diplomacySignature(diplomacy: Diplomacy): string {
+  return `${diplomacy.playerFaction}|${JSON.stringify(diplomacy.relations)}|${JSON.stringify(diplomacy.names)}`
 }

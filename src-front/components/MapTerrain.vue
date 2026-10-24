@@ -4,6 +4,7 @@ import { MapRenderer, type HoverInfo } from '@/game/map/MapRenderer'
 import { GATE_COLOR, WALL_COLOR, getTerrainLevel, TERRAIN_LEVELS } from '@shared/map/terrainLevels'
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@shared/codec'
 import { WorldApi } from '@/game/api/client'
+import CharacterForm from './CharacterForm.vue'
 import type {
   CardCreateDTO,
   CharacterCardDTO,
@@ -16,11 +17,9 @@ import type {
   WorldDTO,
 } from '@shared/protocol'
 import {
-  FACTIONS,
-  FACTION_NAMES,
-  GENERAL_POSITIONS,
-  GENERAL_ROLES,
-  STAT_GRADES,
+  allianceNameOf,
+  allianceNamesOf,
+  type AllianceConfig,
   type Faction,
   type SimSnapshot,
 } from '@shared/types'
@@ -63,17 +62,10 @@ const saveBusy = ref(false)
 const savesLoading = ref(false)
 const cards = ref<CharacterCardDTO[]>([])
 const cardFormOpen = ref(false)
+const editingCard = ref<CharacterCardDTO | null>(null)
 const cardsLoading = ref(false)
 const cardBusy = ref(false)
-const cardDraft = ref<CardCreateDTO>({
-  name: '',
-  faction: 'red',
-  role: '武将',
-  position: '无',
-  attack: '中',
-  magic: '低',
-  personality: '',
-})
+const alliances = ref<AllianceConfig[]>([])
 const errorMessage = ref('')
 let lastOccupationVersion = -1
 let source: EventSource | null = null
@@ -86,7 +78,8 @@ function levelColor(level: number): string {
   return toCss(getTerrainLevel(level).color)
 }
 
-const diplomacy = computed(() => createDiplomacy(agentFaction.value))
+const diplomacy = computed(() => createDiplomacy(alliances.value))
+const allianceNames = computed(() => allianceNamesOf(alliances.value))
 
 function relationColorCss(faction: Faction): string {
   return toCss(relationStyleOf(diplomacy.value, faction).fill)
@@ -183,7 +176,8 @@ function applyWorld(world: WorldDTO): void {
   speed.value = state.speed
   autoCommand.value = state.autoCommand
   autoInterval.value = state.autoInterval
-  agentFaction.value = state.faction
+  agentFaction.value = state.playerFaction
+  alliances.value = world.alliances.map((item) => ({ ...item }))
   setLlmStatus(world.llm)
   lastOccupationVersion = -1
 }
@@ -193,8 +187,8 @@ function applyState(state: GameStateDTO): void {
   speed.value = state.speed
   autoCommand.value = state.autoCommand
   autoInterval.value = state.autoInterval
-  if (state.faction !== agentFaction.value) {
-    agentFaction.value = state.faction
+  if (state.playerFaction !== agentFaction.value) {
+    agentFaction.value = state.playerFaction
     lastOccupationVersion = -1
     renderer.value?.setDiplomacy(diplomacy.value)
   }
@@ -366,10 +360,6 @@ function onAutoIntervalChange(): void {
   void control({ autoInterval: autoInterval.value })
 }
 
-function onFactionChange(): void {
-  void control({ faction: agentFaction.value })
-}
-
 async function resetWorld(): Promise<void> {
   try {
     const world = await api.reset()
@@ -467,22 +457,27 @@ async function refreshCards(): Promise<void> {
   }
 }
 
-async function createCard(): Promise<void> {
+function openCreateCard(): void {
+  editingCard.value = null
+  cardFormOpen.value = true
+}
+
+function openEditCard(card: CharacterCardDTO): void {
+  editingCard.value = card
+  cardFormOpen.value = true
+}
+
+async function saveCard(payload: CardCreateDTO): Promise<void> {
   if (cardBusy.value) return
-  if (!cardDraft.value.name.trim()) {
-    errorMessage.value = '名称不能为空'
-    return
-  }
   cardBusy.value = true
   try {
-    cards.value = (
-      await api.createCard({ ...cardDraft.value, name: cardDraft.value.name.trim() })
-    ).cards
-    cardDraft.value.name = ''
+    cards.value = editingCard.value
+      ? (await api.updateCard(editingCard.value.id, payload)).cards
+      : (await api.createCard(payload)).cards
     cardFormOpen.value = false
     errorMessage.value = ''
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '角色创建失败'
+    errorMessage.value = error instanceof Error ? error.message : '角色保存失败'
   } finally {
     cardBusy.value = false
   }
@@ -490,7 +485,8 @@ async function createCard(): Promise<void> {
 
 function cardMeta(card: CharacterCardDTO): string {
   const parts = [
-    FACTION_NAMES[card.faction],
+    allianceNameOf(allianceNames.value, card.faction),
+    card.team ?? '无团',
     card.role,
     `职位 ${card.position === '无' ? '无（上前线）' : card.position}`,
     `攻击 ${card.attack}`,
@@ -512,10 +508,6 @@ function openSettings(tab: SettingsTab): void {
 watch([settingsOpen, settingsTab], ([open, tab]) => {
   if (open && tab === 'save') void refreshSaves()
   if (open && tab === 'card') void refreshCards()
-})
-
-watch(cardFormOpen, (open) => {
-  if (open) cardDraft.value.faction = agentFaction.value
 })
 
 onMounted(async () => {
@@ -666,95 +658,15 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <div v-if="cardFormOpen" class="card-form-mask" @click.self="cardFormOpen = false">
-      <section class="card-form" role="dialog" aria-modal="true" aria-label="添加角色">
-        <header class="settings-head">
-          <h3>添加角色</h3>
-          <button type="button" class="close" aria-label="关闭" @click="cardFormOpen = false">
-            ×
-          </button>
-        </header>
-        <div class="card-form-body">
-          <label class="field">
-            <span>名称</span>
-            <input v-model="cardDraft.name" type="text" maxlength="24" placeholder="角色名称" />
-          </label>
-          <label class="field">
-            <span>同盟</span>
-            <select v-model="cardDraft.faction">
-              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>定位</span>
-            <select v-model="cardDraft.role">
-              <option v-for="role in GENERAL_ROLES" :key="role" :value="role">{{ role }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>职位</span>
-            <select v-model="cardDraft.position">
-              <option v-for="position in GENERAL_POSITIONS" :key="position" :value="position">
-                {{ position === '无' ? '无（上前线）' : position }}
-              </option>
-            </select>
-          </label>
-        <div class="card-grid">
-          <label class="field">
-            <span>攻击</span>
-            <select v-model="cardDraft.attack">
-              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>魔力</span>
-            <select v-model="cardDraft.magic">
-              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
-            </select>
-          </label>
-        </div>
-          <label class="field">
-            <span>性格</span>
-            <input
-              v-model="cardDraft.personality"
-              type="text"
-              maxlength="120"
-              placeholder="如：勇猛、忠诚"
-            />
-          </label>
-          <label class="field">
-            <span>描述</span>
-            <textarea
-              v-model="cardDraft.description"
-              rows="2"
-              placeholder="背景与经历（可选）"
-            ></textarea>
-          </label>
-          <label class="field">
-            <span>对话提示词</span>
-            <textarea
-              v-model="cardDraft.dialoguePrompt"
-              rows="2"
-              placeholder="说话方式与语气（可选）"
-            ></textarea>
-          </label>
-          <label class="field">
-            <span>作者注释</span>
-            <textarea
-              v-model="cardDraft.authorNote"
-              rows="2"
-              placeholder="给使用者看的备注（可选）"
-            ></textarea>
-          </label>
-          <div class="settings-actions">
-            <button type="button" :disabled="cardBusy" @click="createCard">
-              {{ cardBusy ? '保存中…' : '保存' }}
-            </button>
-            <button type="button" class="ghost" @click="cardFormOpen = false">取消</button>
-          </div>
-        </div>
-      </section>
-    </div>
+    <CharacterForm
+      v-if="cardFormOpen"
+      :card="editingCard"
+      :alliances="alliances"
+      :busy="cardBusy"
+      :error="errorMessage"
+      @save="saveCard"
+      @close="cardFormOpen = false"
+    />
 
     <div v-if="settingsOpen" class="settings-mask" @click.self="settingsOpen = false">
       <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -795,12 +707,10 @@ onBeforeUnmount(() => {
         </nav>
 
         <div v-if="settingsTab === 'march'" class="settings-body">
-          <label class="field">
-            <span>当前同盟</span>
-            <select v-model="agentFaction" @change="onFactionChange">
-              <option v-for="f in FACTIONS" :key="f" :value="f">{{ FACTION_NAMES[f] }}</option>
-            </select>
-          </label>
+          <div class="field">
+            <span>我方同盟</span>
+            <strong class="value">{{ allianceNameOf(allianceNames, agentFaction) }}</strong>
+          </div>
           <label class="field">
             <span>推演速度</span>
             <select v-model.number="speed" @change="onSpeedChange">
@@ -829,7 +739,7 @@ onBeforeUnmount(() => {
 
         <div v-else-if="settingsTab === 'card'" class="settings-body">
           <div class="settings-actions">
-            <button type="button" @click="cardFormOpen = true">添加角色</button>
+            <button type="button" @click="openCreateCard">添加角色</button>
             <span class="meta">{{ cardsLoading ? '读取中…' : `共 ${cards.length} 张卡` }}</span>
           </div>
           <ul v-if="cards.length" class="save-list">
@@ -839,6 +749,9 @@ onBeforeUnmount(() => {
                   {{ card.name }}{{ card.builtin ? ' · 内置' : '' }}
                 </strong>
                 <span class="meta">{{ cardMeta(card) }}</span>
+              </div>
+              <div class="save-actions">
+                <button type="button" @click="openEditCard(card)">编辑</button>
               </div>
             </li>
           </ul>
@@ -975,10 +888,10 @@ onBeforeUnmount(() => {
 
           <h3>同盟与外交</h3>
           <ul>
-            <li v-for="faction in FACTIONS" :key="faction">
-              <span class="swatch" :style="factionSwatchStyle(faction)"></span>
-              <span class="name">{{ FACTION_NAMES[faction] }}</span>
-              <span class="rel">{{ factionRelationLabel(faction) }}</span>
+            <li v-for="alliance in alliances" :key="alliance.faction">
+              <span class="swatch" :style="factionSwatchStyle(alliance.faction)"></span>
+              <span class="name">{{ alliance.name }}</span>
+              <span class="rel">{{ factionRelationLabel(alliance.faction) }}</span>
             </li>
           </ul>
 
@@ -1283,47 +1196,6 @@ onBeforeUnmount(() => {
   background: rgba(214, 186, 122, 0.55);
 }
 
-.card-form-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 120;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: rgba(4, 8, 11, 0.45);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-}
-
-.card-form {
-  width: min(380px, 100%);
-  max-height: min(86vh, 700px);
-  display: flex;
-  flex-direction: column;
-  padding: 14px 16px 16px;
-  border: 1px solid rgba(214, 186, 122, 0.38);
-  border-radius: 14px;
-  background: rgba(12, 19, 24, 0.95);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
-}
-
-.card-form-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-  padding-right: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.card-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
 .settings-actions .ghost {
   border-color: rgba(255, 255, 255, 0.16);
   background: transparent;
@@ -1608,6 +1480,14 @@ onBeforeUnmount(() => {
 .field > span {
   flex: none;
   width: 84px;
+}
+
+.field .value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e9e4d6;
 }
 
 .field input[type='text'],
