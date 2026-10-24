@@ -6,7 +6,6 @@ import { CityLayer } from './CityLayer'
 import { hexCornerPoints, tileKey } from '@shared/map/hex'
 import type { MapData } from '@shared/map/MapGenerator'
 import { RiverLayer } from './RiverLayer'
-import { RoadLayer } from './RoadLayer'
 import { TerrainLayer } from './TerrainLayer'
 import { getTerrainLevel } from '@shared/map/terrainLevels'
 
@@ -67,7 +66,6 @@ export class MapRenderer {
   private map: MapData | null = null
   private terrainLayer: TerrainLayer | null = null
   private riverLayer: RiverLayer | null = null
-  private roadLayer: RoadLayer | null = null
   private agentLayer: AgentLayer | null = null
   private cityLayer: CityLayer | null = null
 
@@ -248,9 +246,8 @@ export class MapRenderer {
     this.map = map
     this.terrainLayer = new TerrainLayer(map)
     this.riverLayer = new RiverLayer(map.rivers)
-    this.roadLayer = new RoadLayer(map.roads, map)
 
-    this.mapGroup.add(this.terrainLayer.group, this.riverLayer.group, this.roadLayer.group)
+    this.mapGroup.add(this.terrainLayer.group, this.riverLayer.group)
     this.options.onReady?.({ tiles: map.tiles.length, seed: map.seed })
   }
 
@@ -263,13 +260,8 @@ export class MapRenderer {
       this.mapGroup.remove(this.riverLayer.group)
       this.riverLayer.dispose()
     }
-    if (this.roadLayer) {
-      this.mapGroup.remove(this.roadLayer.group)
-      this.roadLayer.dispose()
-    }
     this.terrainLayer = null
     this.riverLayer = null
-    this.roadLayer = null
     this.map = null
   }
 

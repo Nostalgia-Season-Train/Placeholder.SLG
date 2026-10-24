@@ -902,7 +902,7 @@ onBeforeUnmount(() => {
           <ul>
             <li>
               <span class="swatch road"></span><span class="name">道路</span>
-              <span class="ldesc">沿地形连接主要区域</span>
+              <span class="ldesc">道路瓦片，行军成本更低，遇水面与城墙断开</span>
             </li>
             <li>
               <span class="swatch river"></span><span class="name">河流</span>

@@ -51,25 +51,6 @@ export function hexDistance(a: Coord, b: Coord): number {
   return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2
 }
 
-/** Distance to the nearest road center line, used to discount movement cost */
-function roadDistance(x: number, z: number, roads: { x: number; z: number }[][]): number {
-  let min = Infinity
-  for (const path of roads) {
-    for (let i = 0; i < path.length - 1; i++) {
-      const a = path[i]!
-      const b = path[i + 1]!
-      const dx = b.x - a.x
-      const dz = b.z - a.z
-      const lengthSq = dx * dx + dz * dz
-      let t = lengthSq === 0 ? 0 : ((x - a.x) * dx + (z - a.z) * dz) / lengthSq
-      t = Math.max(0, Math.min(1, t))
-      const distance = Math.hypot(x - (a.x + dx * t), z - (a.z + dz * t))
-      if (distance < min) min = distance
-    }
-  }
-  return min
-}
-
 /** Base movement cost per terrain level; mountains and high mountains are impassable */
 const BASE_MOVE_COST = [1, 1, 1.25, 1.6, Infinity, Infinity]
 
@@ -79,11 +60,11 @@ export function buildTerrain(map: MapData): WorldTerrain {
   let maxLevel = 0
 
   for (const tile of map.tiles) {
-    const nearRoad = roadDistance(tile.x, tile.z, map.roads) < 1.05
+    const onRoad = tile.isRoad
     const base = BASE_MOVE_COST[Math.max(0, Math.min(5, tile.level))] ?? 1
     let moveCost = base
     if (tile.isBank && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.9)
-    if (nearRoad && Number.isFinite(moveCost)) moveCost = Math.max(0.62, moveCost * 0.6)
+    if (onRoad && Number.isFinite(moveCost)) moveCost = Math.max(0.62, moveCost * 0.6)
     // 关口是城墙上的唯一通道，保持较高的通行成本
     if (tile.isGate && Number.isFinite(moveCost)) moveCost = Math.max(moveCost, 1.4)
 
@@ -91,7 +72,7 @@ export function buildTerrain(map: MapData): WorldTerrain {
     const value = passable
       ? tile.isGate
         ? 40
-        : Math.round((tile.level + 1) * 8 + (nearRoad ? 6 : 0) + (tile.isBank ? -4 : 0))
+        : Math.round((tile.level + 1) * 8 + (onRoad ? 6 : 0) + (tile.isBank ? -4 : 0))
       : 0
 
     const info: TileInfo = {

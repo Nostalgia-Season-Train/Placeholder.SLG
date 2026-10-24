@@ -17,6 +17,8 @@ export interface MapTile {
   isWall: boolean
   /** 分区边界上的关口，可通行 */
   isGate: boolean
+  /** 道路瓦片，行军成本更低 */
+  isRoad: boolean
 }
 
 export interface MapBounds {
@@ -33,7 +35,6 @@ export interface MapData {
   tiles: MapTile[]
   tileMap: Map<string, MapTile>
   rivers: PlanePoint[][]
-  roads: PlanePoint[][]
   bounds: MapBounds
   /** 三处出生点，顺序与阵营顺序一致 */
   spawns: Coord[]
@@ -239,6 +240,7 @@ export function generateMap(seed: number): MapData {
       isWater: false,
       isWall: false,
       isGate: false,
+      isRoad: false,
     }
   })
 
@@ -316,15 +318,10 @@ export function generateMap(seed: number): MapData {
   const tileMap = new Map<string, MapTile>()
   for (const tile of tiles) tileMap.set(tileKey(tile.q, tile.r), tile)
 
-  // 道路：两条横向主路 + 一条纵向连接路，高度跟随地形
-  const roads: PlanePoint[][] = [
-    createHorizontalRoad(bounds, rng, 0.36, (bounds.maxZ - bounds.minZ) * 0.08, rng() * Math.PI * 2),
-    createHorizontalRoad(bounds, rng, 0.64, (bounds.maxZ - bounds.minZ) * 0.07, rng() * Math.PI * 2 + 1.3),
-    createVerticalRoad(bounds, rng, 0.52, (bounds.maxX - bounds.minX) * 0.06, rng() * Math.PI * 2),
-  ]
-
   // 分区：三条分界线自地图中心延伸到边缘，用城墙、山脉与河流把地图切成三块
   const spawns = createRegions(tiles, tileMap, bounds)
+  // 第二次生成：地形、城墙与关口都定案之后，再按可通行地块铺道路
+  createRoads(tileMap, spawns)
 
   return {
     seed,
@@ -333,7 +330,6 @@ export function generateMap(seed: number): MapData {
     tiles,
     tileMap,
     rivers,
-    roads,
     bounds,
     spawns,
   }
@@ -367,19 +363,6 @@ function hexDistance(a: Coord, b: Coord): number {
   const dq = a.q - b.q
   const dr = a.r - b.r
   return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2
-}
-
-function nearestTile(tiles: MapTile[], coord: Coord): MapTile | null {
-  let best: MapTile | null = null
-  let bestDistance = Infinity
-  for (const tile of tiles) {
-    const distance = hexDistance(tile, coord)
-    if (distance < bestDistance) {
-      bestDistance = distance
-      best = tile
-    }
-  }
-  return best
 }
 
 function cubeRound(x: number, y: number, z: number): Coord {
@@ -423,6 +406,167 @@ function flattenPocket(tiles: MapTile[], center: Coord): void {
     tile.level = 1
     tile.height = getTerrainLevel(1).height
   }
+}
+
+/** 可通行地块；关口是城墙上的通道，可以经过但不铺路面 */
+function isPassable(tile: MapTile): boolean {
+  return !tile.isWater && !tile.isWall && tile.level < 4
+}
+
+/** 沿可通行地块做广度优先搜索，返回从起点到终点的地块序列 */
+function findTilePath(tileMap: Map<string, MapTile>, from: Coord, to: Coord): Coord[] | null {
+  const parents = new Map<string, Coord | null>()
+  const queue: Coord[] = [from]
+  parents.set(tileKey(from.q, from.r), null)
+
+  for (let head = 0; head < queue.length; head++) {
+    const current = queue[head]!
+    for (const offset of NEIGHBOR_OFFSETS) {
+      const next: Coord = { q: current.q + offset.q, r: current.r + offset.r }
+      const key = tileKey(next.q, next.r)
+      if (parents.has(key)) continue
+      const tile = tileMap.get(key)
+      if (!tile || !isPassable(tile)) continue
+      parents.set(key, current)
+      if (next.q === to.q && next.r === to.r) {
+        const path: Coord[] = []
+        let node: Coord | null = next
+        while (node) {
+          path.push(node)
+          node = parents.get(tileKey(node.q, node.r)) ?? null
+        }
+        return path.reverse()
+      }
+      queue.push(next)
+    }
+  }
+  return null
+}
+
+/** 第二次生成：地形与关口定案之后再铺道路，路面一直连到关口 */
+function createRoads(tileMap: Map<string, MapTile>, spawns: Coord[]): void {
+  const gates: Coord[] = []
+  for (const tile of tileMap.values()) {
+    if (tile.isGate) gates.push({ q: tile.q, r: tile.r })
+  }
+
+  const routes: (Coord[] | null)[] = []
+  // 关口之间先连通，让三处分区都有贯穿的路
+  for (let i = 0; i < gates.length; i++) {
+    for (let j = i + 1; j < gates.length; j++) {
+      routes.push(findTilePath(tileMap, gates[i]!, gates[j]!))
+    }
+  }
+  // 每处出生点接上最近的一个关口
+  for (const spawn of spawns) {
+    let best: Coord[] | null = null
+    for (const gate of gates) {
+      const path = findTilePath(tileMap, spawn, gate)
+      if (path && (!best || path.length < best.length)) best = path
+    }
+    routes.push(best)
+  }
+
+  for (const route of routes) {
+    if (!route) continue
+    for (const coord of route) {
+      const tile = tileMap.get(tileKey(coord.q, coord.r))
+      if (!tile || tile.isGate) continue
+      tile.isRoad = true
+    }
+  }
+
+  // 出生点与关口前后的瓦片必须保留，否则稀疏化会把路从关卡前截断
+  const keep = new Set(spawns.map((spawn) => tileKey(spawn.q, spawn.r)))
+  for (const gate of gates) {
+    for (const offset of NEIGHBOR_OFFSETS) {
+      const neighbor = tileMap.get(tileKey(gate.q + offset.q, gate.r + offset.r))
+      if (neighbor?.isRoad) keep.add(tileKey(neighbor.q, neighbor.r))
+    }
+  }
+  thinRoadTriangles(tileMap, keep)
+
+  // 断口处遗留的孤立瓦片既不连通也画不出来，直接摘掉
+  for (const tile of tileMap.values()) {
+    if (!tile.isRoad) continue
+    const linked = NEIGHBOR_OFFSETS.some(
+      (offset) => tileMap.get(tileKey(tile.q + offset.q, tile.r + offset.r))?.isRoad,
+    )
+    if (!linked) tile.isRoad = false
+  }
+}
+
+/**
+ * 斜向铺路会多出三角格：某格的道路邻格彼此相邻时，这一格只是补角，
+ * 去掉后两侧仍然连通，路面也就不会连成三角形色块。
+ */
+function thinRoadTriangles(tileMap: Map<string, MapTile>, keep: Set<string>): void {
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const tile of tileMap.values()) {
+      if (!tile.isRoad) continue
+      if (keep.has(tileKey(tile.q, tile.r))) continue
+      const links: MapTile[] = []
+      for (const offset of NEIGHBOR_OFFSETS) {
+        const neighbor = tileMap.get(tileKey(tile.q + offset.q, tile.r + offset.r))
+        if (neighbor?.isRoad) links.push(neighbor)
+      }
+      if (links.length < 2) continue
+      const redundant = links.every((a, i) =>
+        links.slice(i + 1).every((b) => hexDistance(a, b) === 1),
+      )
+      if (!redundant) continue
+      tile.isRoad = false
+      changed = true
+    }
+  }
+}
+
+/** 收集所有能经关口互相到达的可通行地块，出生点必须落在其中 */
+function gateReachable(tileMap: Map<string, MapTile>): Set<string> {
+  const reachable = new Set<string>()
+  const queue: MapTile[] = []
+
+  for (const tile of tileMap.values()) {
+    if (!tile.isGate) continue
+    const key = tileKey(tile.q, tile.r)
+    reachable.add(key)
+    queue.push(tile)
+  }
+
+  for (let head = 0; head < queue.length; head++) {
+    const current = queue[head]!
+    for (const offset of NEIGHBOR_OFFSETS) {
+      const next = tileMap.get(tileKey(current.q + offset.q, current.r + offset.r))
+      if (!next) continue
+      const key = tileKey(next.q, next.r)
+      if (reachable.has(key) || !isPassable(next)) continue
+      reachable.add(key)
+      queue.push(next)
+    }
+  }
+
+  return reachable
+}
+
+/** 离指定坐标最近、且与关口连通的出生地块 */
+function nearestReachableTile(
+  tileMap: Map<string, MapTile>,
+  reachable: Set<string>,
+  coord: Coord,
+): MapTile | null {
+  let best: MapTile | null = null
+  let bestDistance = Infinity
+  for (const tile of tileMap.values()) {
+    if (!reachable.has(tileKey(tile.q, tile.r))) continue
+    const distance = hexDistance(tile, coord)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = tile
+    }
+  }
+  return best
 }
 
 /** 用分界线把地图切成三块，并在每块内部放置一处出生点 */
@@ -491,10 +635,12 @@ function createRegions(
 
   const spawns: Coord[] = []
   const radius = Math.min(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * SPAWN_RADIUS_RATIO
+  const reachable = gateReachable(tileMap)
 
   for (const angle of SPAWN_ANGLES) {
     const seed = worldToAxial(centerX + Math.cos(angle) * radius, centerZ + Math.sin(angle) * radius)
-    const anchor = tileMap.get(tileKey(seed.q, seed.r)) ?? nearestTile(tiles, seed)
+    // 出生点只落在与关口连通的地块上，避免被山脊或河流围死
+    const anchor = nearestReachableTile(tileMap, reachable, seed) ?? tileMap.get(tileKey(seed.q, seed.r))
     if (!anchor) continue
 
     flattenPocket(tiles, anchor)
@@ -580,64 +726,4 @@ function createMountainRidge(
   }
 
   return sampleCatmullRom(controls, 8)
-}
-
-function createHorizontalRoad(
-  bounds: MapBounds,
-  rng: () => number,
-  baseRatio: number,
-  amplitude: number,
-  phase: number,
-): PlanePoint[] {
-  const controls: PlanePoint[] = []
-  const steps = 14
-  const minX = bounds.minX - 3
-  const maxX = bounds.maxX + 3
-  const baseZ = bounds.minZ + (bounds.maxZ - bounds.minZ) * baseRatio
-  const amp = amplitude * (0.8 + rng() * 0.4)
-
-  for (let i = 0; i < steps; i++) {
-    const t = i / (steps - 1)
-    controls.push({
-      x: minX + (maxX - minX) * t,
-      z:
-        baseZ +
-        Math.sin(t * Math.PI * 1.8 + phase) * amp +
-        Math.sin(t * Math.PI * 4.2 + phase * 2.1) * amp * 0.22,
-    })
-  }
-  return sampleCatmullRom(controls, 8)
-}
-
-function createVerticalRoad(
-  bounds: MapBounds,
-  rng: () => number,
-  baseRatio: number,
-  amplitude: number,
-  phase: number,
-): PlanePoint[] {
-  const controls: PlanePoint[] = []
-  const steps = 14
-  const minZ = bounds.minZ - 3
-  const maxZ = bounds.maxZ + 3
-  const baseX = bounds.minX + (bounds.maxX - bounds.minX) * baseRatio
-  const amp = amplitude * (0.8 + rng() * 0.4)
-
-  for (let i = 0; i < steps; i++) {
-    const t = i / (steps - 1)
-    controls.push({
-      x:
-        baseX +
-        Math.sin(t * Math.PI * 1.7 + phase) * amp +
-        Math.sin(t * Math.PI * 4.6 + phase * 1.5) * amp * 0.2,
-      z: minZ + (maxZ - minZ) * t,
-    })
-  }
-  return sampleCatmullRom(controls, 8)
-}
-
-/** 查询某个世界坐标下的地形顶面高度（道路贴地用） */
-export function terrainHeightAt(map: MapData, x: number, z: number): number {
-  const { q, r } = worldToAxial(x, z)
-  return map.tileMap.get(tileKey(q, r))?.height ?? 0
 }

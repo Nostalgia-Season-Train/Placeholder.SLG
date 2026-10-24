@@ -1,13 +1,7 @@
 import * as THREE from 'three'
-import { HEX_RADIUS } from '@shared/map/hex'
+import { HEX_RADIUS, tileKey } from '@shared/map/hex'
 import { tileRng, type MapData, type MapTile } from '@shared/map/MapGenerator'
-import {
-  BANK_COLOR,
-  BANK_HEIGHT,
-  GATE_COLOR,
-  WALL_COLOR,
-  getTerrainLevel,
-} from '@shared/map/terrainLevels'
+import { BANK_COLOR, GATE_COLOR, WALL_COLOR, getTerrainLevel } from '@shared/map/terrainLevels'
 
 interface DecorInstance {
   x: number
@@ -23,6 +17,18 @@ interface DecorSpec {
   material: THREE.MeshStandardMaterial
   items: DecorInstance[]
 }
+
+const ROAD_NEIGHBORS = [
+  { q: 1, r: 0 },
+  { q: 1, r: -1 },
+  { q: 0, r: -1 },
+  { q: -1, r: 0 },
+  { q: -1, r: 1 },
+  { q: 0, r: 1 },
+]
+
+/** 六边形内切圆半径，即地块中心到每条边中点的距离 */
+const ROAD_APOTHEM = (HEX_RADIUS * Math.sqrt(3)) / 2
 
 /**
  * 地形层：所有六边形地块合成一个 InstancedMesh，
@@ -92,6 +98,8 @@ export class TerrainLayer {
     const merlons: DecorInstance[] = []
     const gatePosts: DecorInstance[] = []
     const gateLintels: DecorInstance[] = []
+    const roadStrips: DecorInstance[] = []
+    const roadLinks = buildRoadLinks(map)
 
     const tint = (hex: number, rand: () => number, amount = 0.1) =>
       new THREE.Color(hex).offsetHSL(0, (rand() - 0.5) * 0.03, (rand() - 0.5) * amount).getHex()
@@ -100,7 +108,8 @@ export class TerrainLayer {
       const rand = tileRng(map.seed, tile.q, tile.r)
       const top = tile.height
 
-      if (tile.isBank && !tile.isWall && !tile.isGate) continue
+      // 河滩不放装饰物，但可以铺道路
+      if (tile.isBank && !tile.isWall && !tile.isGate && !tile.isRoad) continue
 
       const scatter = (radius: number): DecorInstance => {
         const angle = rand() * Math.PI * 2
@@ -154,6 +163,28 @@ export class TerrainLayer {
           item.scale = 1.05 + rand() * 0.2
           item.color = tint(0x7c8088, rand, 0.1)
           merlons.push(item)
+        }
+        continue
+      }
+
+      if (tile.isRoad) {
+        // 每条道路从地块中心铺到与相邻道路瓦片共享的那条边的中点，
+        // 相邻两格各铺一半，拼起来就是连续的路面，转弯处也不会错位
+        const roadColor = tint(0x8d7a55, rand, 0.06)
+        for (const neighbor of roadLinks.get(tileKey(tile.q, tile.r)) ?? []) {
+          const dx = neighbor.x - tile.x
+          const dz = neighbor.z - tile.z
+          const length = Math.hypot(dx, dz)
+          const ux = dx / length
+          const uz = dz / length
+          roadStrips.push({
+            x: tile.x + ux * (ROAD_APOTHEM / 2),
+            y: top + 0.012,
+            z: tile.z + uz * (ROAD_APOTHEM / 2),
+            rotY: Math.atan2(-uz, ux),
+            scale: 1,
+            color: roadColor,
+          })
         }
         continue
       }
@@ -277,6 +308,11 @@ export class TerrainLayer {
         material: decorMaterial(false),
         items: gateLintels,
       },
+      {
+        geometry: new THREE.BoxGeometry(ROAD_APOTHEM, 0.02, 0.34),
+        material: decorMaterial(false),
+        items: roadStrips,
+      },
     ]
 
     const dummy = new THREE.Object3D()
@@ -317,6 +353,79 @@ export class TerrainLayer {
   }
 }
 
+/** 无向边的唯一键，两个方向共用 */
+function roadEdgeKey(a: MapTile, b: MapTile): string {
+  const ka = tileKey(a.q, a.r)
+  const kb = tileKey(b.q, b.r)
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`
+}
+
+/**
+ * 道路渲染用的连接关系：先取生成树保证每个连通块完整，
+ * 再补回不封闭成三角形的边，保留转弯与 Y 形岔口。
+ * 三格两两相邻时只画其中两条，否则路面会填成三角形色块。
+ */
+function buildRoadLinks(map: MapData): Map<string, MapTile[]> {
+  const links = new Map<string, MapTile[]>()
+  const edges = new Set<string>()
+  const visited = new Set<string>()
+
+  const link = (a: MapTile, b: MapTile) => {
+    edges.add(roadEdgeKey(a, b))
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as const) {
+      const key = tileKey(from.q, from.r)
+      const list = links.get(key)
+      if (list) list.push(to)
+      else links.set(key, [to])
+    }
+  }
+
+  const rootKey = (tile: MapTile) => tileKey(tile.q, tile.r)
+  const roadAt = (q: number, r: number) => {
+    const tile = map.tileMap.get(tileKey(q, r))
+    return tile?.isRoad ? tile : null
+  }
+
+  for (const tile of map.tiles) {
+    if (!tile.isRoad) continue
+    if (visited.has(rootKey(tile))) continue
+    visited.add(rootKey(tile))
+    const queue = [tile]
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head]!
+      for (const offset of ROAD_NEIGHBORS) {
+        const next = roadAt(current.q + offset.q, current.r + offset.r)
+        if (!next) continue
+        const nextKey = rootKey(next)
+        if (visited.has(nextKey)) continue
+        visited.add(nextKey)
+        link(current, next)
+        queue.push(next)
+      }
+    }
+  }
+
+  for (const tile of map.tiles) {
+    if (!tile.isRoad) continue
+    for (const offset of ROAD_NEIGHBORS) {
+      const next = roadAt(tile.q + offset.q, tile.r + offset.r)
+      if (!next || edges.has(roadEdgeKey(tile, next))) continue
+      // 两格已与同一个地块相连时再连一条就会闭合出三角
+      const closed = (links.get(rootKey(tile)) ?? []).some((other) =>
+        ROAD_NEIGHBORS.some(
+          (step) => other.q + step.q === next.q && other.r + step.r === next.r,
+        ),
+      )
+      if (!closed) link(tile, next)
+    }
+  }
+
+  return links
+}
+
 function decorMaterial(flat: boolean): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -350,8 +459,4 @@ function paintFaceColors(geometry: THREE.BufferGeometry): void {
     }
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-}
-
-export function tileTopY(tile: MapTile): number {
-  return tile.isBank ? BANK_HEIGHT : tile.height
 }
