@@ -1,5 +1,6 @@
 # Temp
 .tmp-browser/
+.trae/
 
 # Server runtime data (LLM settings with API keys)
 src-server/data/
