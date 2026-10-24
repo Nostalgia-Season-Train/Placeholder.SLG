@@ -154,6 +154,8 @@ export interface CharacterCardDTO extends CardSpawn {
   dialoguePrompt: string
   authorNote: string
   builtin: boolean
+  /** 是否加入对局；未加入的角色只存在于角色库，不生成单位与协程 */
+  active: boolean
 }
 
 export interface CardListDTO {
@@ -165,6 +167,8 @@ export interface CardCreateDTO extends Omit<CardSpawn, 'id'> {
   description?: string
   dialoguePrompt?: string
   authorNote?: string
+  /** 省略时新建卡默认不加入对局，编辑时保持原值 */
+  active?: boolean
 }
 
 export type ServerEvent =

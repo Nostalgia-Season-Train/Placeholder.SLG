@@ -152,6 +152,7 @@ function openDatabase(): DatabaseSync {
       dialogue_prompt TEXT NOT NULL DEFAULT '',
       author_note     TEXT NOT NULL DEFAULT '',
       builtin         INTEGER NOT NULL DEFAULT 0,
+      active          INTEGER NOT NULL DEFAULT 1,
       created_at      TEXT NOT NULL
     );
   `)
@@ -160,21 +161,24 @@ function openDatabase(): DatabaseSync {
   if (!columns.some((column) => column.name === 'team')) {
     database.exec("ALTER TABLE cards ADD COLUMN team TEXT NOT NULL DEFAULT ''")
   }
+  if (!columns.some((column) => column.name === 'active')) {
+    database.exec('ALTER TABLE cards ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
+  }
   return database
 }
 
 const db = openDatabase()
 
 const CARD_COLUMNS =
-  'id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, created_at AS createdAt'
+  'id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, active, created_at AS createdAt'
 
 const listStatement = db.prepare(
   `SELECT ${CARD_COLUMNS} FROM cards ORDER BY created_at, id`,
 )
 const readStatement = db.prepare(`SELECT ${CARD_COLUMNS} FROM cards WHERE id = ?`)
 const insertStatement = db.prepare(`
-  INSERT INTO cards (id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt, author_note, builtin, created_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cards (id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt, author_note, builtin, active, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     faction = excluded.faction,
@@ -188,13 +192,14 @@ const insertStatement = db.prepare(`
     dialogue_prompt = excluded.dialogue_prompt,
     author_note = excluded.author_note,
     builtin = excluded.builtin,
+    active = excluded.active,
     created_at = excluded.created_at
 `)
 const updateStatement = db.prepare(`
   UPDATE cards SET
     name = ?, faction = ?, team = ?, role = ?, position = ?,
     attack = ?, magic = ?, description = ?, personality = ?,
-    dialogue_prompt = ?, author_note = ?
+    dialogue_prompt = ?, author_note = ?, active = ?
   WHERE id = ?
 `)
 
@@ -212,6 +217,7 @@ interface CardRow {
   dialoguePrompt: string
   authorNote: string
   builtin: number
+  active: number
   createdAt: string
 }
 
@@ -230,6 +236,7 @@ function toDto(row: CardRow): CharacterCardDTO {
     dialoguePrompt: row.dialoguePrompt,
     authorNote: row.authorNote,
     builtin: row.builtin === 1,
+    active: row.active === 1,
   }
 }
 
@@ -248,6 +255,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     dialoguePrompt: input.dialoguePrompt ?? '',
     authorNote: input.authorNote ?? '',
     builtin,
+    active: input.active ?? false,
   }
   insertStatement.run(
     dto.id,
@@ -263,6 +271,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     dto.dialoguePrompt,
     dto.authorNote,
     dto.builtin ? 1 : 0,
+    dto.active ? 1 : 0,
     new Date().toISOString(),
   )
   return dto
@@ -275,7 +284,7 @@ function seedBuiltinCards(): void {
   }
   if (row.count > 0) return
   BUILTIN_CARDS.forEach((card, index) => {
-    writeCard(`builtin-${index + 1}`, card, true)
+    writeCard(`builtin-${index + 1}`, { ...card, active: true }, true)
   })
 }
 
@@ -307,6 +316,7 @@ export function updateCard(id: string, input: CardCreateDTO): CharacterCardDTO |
     input.personality ?? '',
     input.dialoguePrompt ?? '',
     input.authorNote ?? '',
+    (input.active ?? existing.active === 1) ? 1 : 0,
     id,
   )
   return toDto({
@@ -322,6 +332,7 @@ export function updateCard(id: string, input: CardCreateDTO): CharacterCardDTO |
     personality: input.personality ?? '',
     dialoguePrompt: input.dialoguePrompt ?? '',
     authorNote: input.authorNote ?? '',
+    active: (input.active ?? existing.active === 1) ? 1 : 0,
   })
 }
 

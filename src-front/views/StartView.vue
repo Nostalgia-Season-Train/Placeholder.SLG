@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /**
- * 开局界面：新开局配置同盟与角色，或直接读取旧存档进入地图。
- * 配置只在「开始游戏」时生效，由服务端重建世界。
+ * 开局界面：继续当前对局、开始新游戏、读取存档、管理角色库、LLM 设置。
+ * 同盟配置只在「开始游戏」时提交并由服务端重建世界。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import CharacterForm from '../components/CharacterForm.vue'
+import LlmSettings from '../components/LlmSettings.vue'
 import { WorldApi } from '@/game/api/client'
+import { decodeSnapshot } from '@shared/codec'
+import { createDiplomacy, relationStyleOf } from '@/game/bot/diplomacy'
 import {
   ALLIANCE_RELATIONS,
   ALLIANCE_RELATION_LABELS,
@@ -24,8 +27,17 @@ const router = useRouter()
 
 const FACTION_SLOTS: Faction[] = ['red', 'cyan', 'gold']
 
-type Mode = 'new' | 'load'
-const mode = ref<Mode>('new')
+type Pane = 'continue' | 'new' | 'load' | 'library' | 'settings'
+
+const MENU: { key: Pane; label: string; desc: string }[] = [
+  { key: 'continue', label: '继续', desc: '回到上次对局' },
+  { key: 'new', label: '新游戏', desc: '配置同盟并分配角色' },
+  { key: 'load', label: '读取存档', desc: '从手动存档开始' },
+  { key: 'library', label: '角色库', desc: '角色属性管理' },
+  { key: 'settings', label: '设置', desc: 'LLM 与连接' },
+]
+
+const pane = ref<Pane>('continue')
 const loading = ref(true)
 const busy = ref(false)
 const errorMessage = ref('')
@@ -33,18 +45,33 @@ const errorMessage = ref('')
 const alliances = ref<AllianceConfig[]>([])
 const cards = ref<CharacterCardDTO[]>([])
 const saves = ref<SaveSummaryDTO[]>([])
+const currentRound = ref(0)
+const running = ref(true)
 
 const formOpen = ref(false)
+const formMode = ref<'assign' | 'library'>('library')
 const editingCard = ref<CharacterCardDTO | null>(null)
 
 const availableSlots = computed(() =>
   FACTION_SLOTS.filter((faction) => !alliances.value.some((item) => item.faction === faction)),
 )
 const canAddAlliance = computed(() => availableSlots.value.length > 0)
+const diplomacy = computed(() => createDiplomacy(alliances.value))
+/** 已加入本局的角色与角色库中的闲置角色 */
+const rosterCards = computed(() => cards.value.filter((card) => card.active))
+const idleCards = computed(() => cards.value.filter((card) => !card.active))
 
 function allianceNameOf(faction: Faction): string {
   const alliance = alliances.value.find((item) => item.faction === faction)
   return alliance ? alliance.name : `${FACTION_NAMES[faction]}（未启用）`
+}
+
+function relationLabel(relation: AllianceRelation): string {
+  return ALLIANCE_RELATION_LABELS[relation]
+}
+
+function relationColor(faction: Faction): string {
+  return `#${relationStyleOf(diplomacy.value, faction).fill.toString(16).padStart(6, '0')}`
 }
 
 /* ------------------------------------------------------------------ */
@@ -81,10 +108,17 @@ function removeAlliance(faction: Faction): void {
 }
 
 /* ------------------------------------------------------------------ */
-/* 角色                                                                */
+/* 角色库                                                              */
 /* ------------------------------------------------------------------ */
 
 function cardMeta(card: CharacterCardDTO): string {
+  const parts: string[] = [card.role]
+  if (card.personality) parts.push(card.personality)
+  return parts.join(' · ')
+}
+
+/** 对局内的角色才展示职位，角色库不暴露职位字段 */
+function rosterMeta(card: CharacterCardDTO): string {
   const parts = [card.role, `职位 ${card.position === '无' ? '无（上前线）' : card.position}`]
   if (card.personality) parts.push(card.personality)
   return parts.join(' · ')
@@ -103,6 +137,7 @@ function cardPayload(card: CharacterCardDTO, patch: Partial<CardCreateDTO> = {})
     description: card.description,
     dialoguePrompt: card.dialoguePrompt,
     authorNote: card.authorNote,
+    active: card.active,
     ...patch,
   }
 }
@@ -124,12 +159,19 @@ function onCardTeamChange(card: CharacterCardDTO, team: string): void {
   void patchCard(card, { team: team ? (team as GeneralTeam) : null })
 }
 
-function openCreateCard(): void {
+/** 从角色库加入本局 / 移回角色库 */
+function setCardActive(card: CharacterCardDTO, active: boolean): void {
+  void patchCard(card, { active })
+}
+
+function openCreateCard(mode: 'assign' | 'library' = 'library'): void {
+  formMode.value = mode
   editingCard.value = null
   formOpen.value = true
 }
 
-function openEditCard(card: CharacterCardDTO): void {
+function openEditCard(card: CharacterCardDTO, mode: 'assign' | 'library' = 'library'): void {
+  formMode.value = mode
   editingCard.value = card
   formOpen.value = true
 }
@@ -147,8 +189,12 @@ async function saveCard(payload: CardCreateDTO): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 开局与存档                                                          */
+/* 对局与存档                                                          */
 /* ------------------------------------------------------------------ */
+
+function enterWorld(): void {
+  void router.push({ name: 'map' })
+}
 
 async function startGame(): Promise<void> {
   if (busy.value) return
@@ -213,6 +259,8 @@ onMounted(async () => {
       api.listSaves(),
     ])
     alliances.value = world.alliances.map((item) => ({ ...item }))
+    currentRound.value = decodeSnapshot(world.snapshot).round
+    running.value = world.state.running
     cards.value = cardList.cards
     saves.value = saveList.saves
   } catch (error) {
@@ -228,139 +276,238 @@ onMounted(async () => {
     <div class="vignette"></div>
 
     <header class="start-head">
-      <div>
-        <h1>季前列车 · 开局</h1>
-        <p>配置同盟与角色后开始，或直接读取既有存档</p>
-      </div>
-      <div class="mode-switch">
-        <button type="button" :class="{ active: mode === 'new' }" @click="mode = 'new'">
-          新开局
-        </button>
-        <button type="button" :class="{ active: mode === 'load' }" @click="mode = 'load'">
-          读取存档
-        </button>
-      </div>
+      <h1>季前列车</h1>
+      <p>继续当前对局、开始新游戏、读取存档、管理角色库与设置</p>
     </header>
 
-    <main class="start-body">
-      <section v-if="mode === 'new'" class="panel section">
-        <header class="section-head">
-          <h2>同盟</h2>
-          <span class="meta">最多 3 个 · 恰有一个我方</span>
-        </header>
+    <div class="start-layout">
+      <nav class="start-nav">
+        <button
+          v-for="item in MENU"
+          :key="item.key"
+          type="button"
+          :class="{ active: pane === item.key }"
+          @click="pane = item.key"
+        >
+          <span class="nav-title">{{ item.label }}</span>
+          <span class="nav-desc">{{ item.desc }}</span>
+        </button>
+      </nav>
 
-        <ul class="alliance-list">
-          <li v-for="alliance in alliances" :key="alliance.faction">
-            <input v-model="alliance.name" type="text" maxlength="12" placeholder="同盟名称" />
-            <div class="segmented">
-              <button
-                v-for="relation in ALLIANCE_RELATIONS"
-                :key="relation"
-                type="button"
-                :class="{ active: alliance.relation === relation }"
-                @click="setRelation(alliance, relation)"
-              >
-                {{ ALLIANCE_RELATION_LABELS[relation] }}
+      <main class="start-body">
+        <section v-if="pane === 'continue'" class="panel section">
+          <header class="section-head">
+            <h2>继续游戏</h2>
+            <span class="meta">{{ running ? '推演进行中' : '推演已暂停' }}</span>
+          </header>
+          <div class="world-stats">
+            <div class="stat">
+              <span class="stat-label">当前回合</span>
+              <strong>{{ currentRound }}</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">同盟</span>
+              <strong>{{ alliances.length }}</strong>
+            </div>
+          </div>
+          <ul class="alliance-chips">
+            <li v-for="alliance in alliances" :key="alliance.faction">
+              <span class="swatch" :style="{ background: relationColor(alliance.faction) }"></span>
+              <span>{{ alliance.name }}</span>
+              <span class="meta">{{ relationLabel(alliance.relation) }}</span>
+            </li>
+          </ul>
+          <div class="section-actions">
+            <button type="button" :disabled="loading" @click="enterWorld">继续游戏</button>
+            <span class="meta">回到上次对局的地图与频道</span>
+          </div>
+        </section>
+
+        <template v-else-if="pane === 'new'">
+          <section class="panel section">
+            <header class="section-head">
+              <h2>同盟</h2>
+              <span class="meta">最多 3 个 · 恰有一个我方</span>
+            </header>
+
+            <ul class="alliance-list">
+              <li v-for="alliance in alliances" :key="alliance.faction">
+                <input v-model="alliance.name" type="text" maxlength="12" placeholder="同盟名称" />
+                <div class="segmented">
+                  <button
+                    v-for="relation in ALLIANCE_RELATIONS"
+                    :key="relation"
+                    type="button"
+                    :class="{ active: alliance.relation === relation }"
+                    @click="setRelation(alliance, relation)"
+                  >
+                    {{ relationLabel(relation) }}
+                  </button>
+                </div>
+                <button type="button" class="icon" @click="removeAlliance(alliance.faction)">
+                  ×
+                </button>
+              </li>
+            </ul>
+
+            <div class="section-actions">
+              <button type="button" class="ghost" :disabled="!canAddAlliance" @click="addAlliance">
+                添加同盟
               </button>
+              <span v-if="!canAddAlliance" class="meta">三块预置出生区已全部启用</span>
             </div>
-            <button type="button" class="icon" @click="removeAlliance(alliance.faction)">×</button>
-          </li>
-        </ul>
+          </section>
 
-        <div class="section-actions">
-          <button type="button" class="ghost" :disabled="!canAddAlliance" @click="addAlliance">
-            添加同盟
-          </button>
-          <span v-if="!canAddAlliance" class="meta">三块预置出生区已全部启用</span>
-        </div>
-      </section>
+          <section class="panel section">
+            <header class="section-head">
+              <h2>出战角色</h2>
+              <span class="meta">共 {{ rosterCards.length }} 名 · 指定所属同盟与团</span>
+            </header>
 
-      <section v-if="mode === 'new'" class="panel section">
-        <header class="section-head">
-          <h2>角色</h2>
-          <span class="meta">共 {{ cards.length }} 名 · 可指定同盟与团</span>
-        </header>
+            <ul class="card-list">
+              <li v-for="card in rosterCards" :key="card.id">
+                <div class="card-info">
+                  <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
+                  <span class="meta">{{ rosterMeta(card) }}</span>
+                </div>
+                <select
+                  :value="card.faction"
+                  @change="onCardFactionChange(card, ($event.target as HTMLSelectElement).value as Faction)"
+                >
+                  <option
+                    v-for="alliance in alliances"
+                    :key="alliance.faction"
+                    :value="alliance.faction"
+                  >
+                    {{ alliance.name }}
+                  </option>
+                  <option
+                    v-if="!alliances.some((item) => item.faction === card.faction)"
+                    :value="card.faction"
+                  >
+                    {{ allianceNameOf(card.faction) }}
+                  </option>
+                </select>
+                <select
+                  :value="card.team ?? ''"
+                  @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">无团</option>
+                  <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
+                </select>
+                <button type="button" class="ghost" @click="openEditCard(card, 'assign')">
+                  编辑
+                </button>
+                <button type="button" class="ghost" @click="setCardActive(card, false)">移除</button>
+              </li>
+            </ul>
+            <p v-if="!rosterCards.length" class="meta">暂无出战角色，从下方角色库添加。</p>
 
-        <ul class="card-list">
-          <li v-for="card in cards" :key="card.id">
-            <div class="card-info">
-              <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
-              <span class="meta">{{ cardMeta(card) }}</span>
+            <div class="section-actions">
+              <button type="button" :disabled="busy || loading" @click="startGame">
+                {{ busy ? '开局中…' : '开始游戏' }}
+              </button>
+              <span class="meta">开始游戏会清空当前对局进度，地图保持固定预制</span>
             </div>
-            <select
-              :value="card.faction"
-              @change="onCardFactionChange(card, ($event.target as HTMLSelectElement).value as Faction)"
-            >
-              <option v-for="alliance in alliances" :key="alliance.faction" :value="alliance.faction">
-                {{ alliance.name }}
-              </option>
-              <option
-                v-if="!alliances.some((item) => item.faction === card.faction)"
-                :value="card.faction"
-              >
-                {{ allianceNameOf(card.faction) }}
-              </option>
-            </select>
-            <select
-              :value="card.team ?? ''"
-              @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">无团</option>
-              <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
-            </select>
-            <button type="button" class="ghost" @click="openEditCard(card)">编辑</button>
-          </li>
-        </ul>
+          </section>
 
-        <div class="section-actions">
-          <button type="button" class="ghost" @click="openCreateCard">添加角色</button>
-          <span class="meta">职位为「无」的角色会亲自带兵，大臣与团长留在城中指挥</span>
-        </div>
-      </section>
+          <section class="panel section">
+            <header class="section-head">
+              <h2>角色库（未加入）</h2>
+              <span class="meta">{{ idleCards.length }} 名 · 可加入本局</span>
+            </header>
 
-      <section v-if="mode === 'load'" class="panel section">
-        <header class="section-head">
-          <h2>存档</h2>
-          <span class="meta">共 {{ saves.length }} 个</span>
-        </header>
+            <ul class="card-list">
+              <li v-for="card in idleCards" :key="card.id">
+                <div class="card-info">
+                  <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
+                  <span class="meta">{{ cardMeta(card) }}</span>
+                </div>
+                <button type="button" class="ghost" @click="openEditCard(card, 'library')">
+                  编辑
+                </button>
+                <button type="button" class="ghost" @click="setCardActive(card, true)">添加</button>
+              </li>
+            </ul>
+            <p v-if="!idleCards.length" class="meta">角色库中的角色都已加入本局。</p>
 
-        <ul class="save-list">
-          <li v-for="item in saves" :key="item.id">
-            <div class="card-info">
-              <strong>{{ item.label }}</strong>
-              <span class="meta">第 {{ item.round }} 回合 · {{ formatSavedAt(item.savedAt) }}</span>
+            <div class="section-actions">
+              <button type="button" class="ghost" @click="openCreateCard('library')">
+                添加角色
+              </button>
+              <span class="meta">新建角色默认只进入角色库，加入本局后才会出现在地图上</span>
             </div>
-            <button type="button" :disabled="busy" @click="enterSave(item.id)">读取并进入</button>
-            <button type="button" class="ghost" :disabled="busy" @click="removeSave(item.id)">
-              删除
-            </button>
-          </li>
-        </ul>
-        <p v-if="!saves.length && !loading" class="meta">暂无手动存档。</p>
-      </section>
-    </main>
+          </section>
+        </template>
+
+        <section v-else-if="pane === 'load'" class="panel section">
+          <header class="section-head">
+            <h2>读取存档</h2>
+            <span class="meta">共 {{ saves.length }} 个</span>
+          </header>
+
+          <ul class="save-list">
+            <li v-for="item in saves" :key="item.id">
+              <div class="card-info">
+                <strong>{{ item.label }}</strong>
+                <span class="meta">第 {{ item.round }} 回合 · {{ formatSavedAt(item.savedAt) }}</span>
+              </div>
+              <button type="button" :disabled="busy" @click="enterSave(item.id)">读取并进入</button>
+              <button type="button" class="ghost" :disabled="busy" @click="removeSave(item.id)">
+                删除
+              </button>
+            </li>
+          </ul>
+          <p v-if="!saves.length && !loading" class="meta">暂无手动存档。</p>
+        </section>
+
+        <section v-else-if="pane === 'library'" class="panel section">
+          <header class="section-head">
+            <h2>角色库</h2>
+            <span class="meta">共 {{ cards.length }} 名 · 角色属性与同盟无关</span>
+          </header>
+
+          <ul class="card-list">
+            <li v-for="card in cards" :key="card.id">
+              <div class="card-info">
+                <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
+                <span class="meta">{{ cardMeta(card) }}</span>
+              </div>
+              <span v-if="!card.active" class="tag">未加入</span>
+              <button type="button" class="ghost" @click="openEditCard(card, 'library')">
+                编辑
+              </button>
+            </li>
+          </ul>
+
+          <div class="section-actions">
+            <button type="button" class="ghost" @click="openCreateCard('library')">添加角色</button>
+            <span class="meta">新建角色默认只进入角色库；是否出战在新游戏中决定</span>
+          </div>
+        </section>
+
+        <section v-else class="panel section">
+          <header class="section-head">
+            <h2>设置</h2>
+            <span class="meta">LLM 模式与连接</span>
+          </header>
+          <LlmSettings />
+          <p class="meta">推演速度、存档与角色管理在对局内的设置面板中。</p>
+        </section>
+      </main>
+    </div>
 
     <footer class="start-foot">
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-else-if="loading" class="meta">读取配置中…</p>
-      <div class="foot-actions">
-        <button
-          v-if="mode === 'new'"
-          type="button"
-          :disabled="busy || loading"
-          @click="startGame"
-        >
-          {{ busy ? '开局中…' : '开始游戏' }}
-        </button>
-        <span v-else class="meta">选择存档后直接进入地图</span>
-        <span class="meta">同盟关系：我方绿 · 友方蓝 · 敌方红</span>
-      </div>
+      <span class="meta">同盟关系：我方绿 · 友方蓝 · 敌方红</span>
     </footer>
 
     <CharacterForm
       v-if="formOpen"
       :card="editingCard"
       :alliances="alliances"
+      :mode="formMode"
       :busy="false"
       :error="errorMessage"
       @save="saveCard"
@@ -372,7 +519,7 @@ onMounted(async () => {
 <style scoped>
 .start-page {
   position: relative;
-  min-height: 100dvh;
+  height: 100dvh;
   padding: 32px 20px 24px;
   display: flex;
   flex-direction: column;
@@ -390,19 +537,12 @@ onMounted(async () => {
 }
 
 .start-head,
-.start-body,
+.start-layout,
 .start-foot {
   position: relative;
   z-index: 1;
-  width: min(860px, 100%);
+  width: min(920px, 100%);
   margin: 0 auto;
-}
-
-.start-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
 }
 
 .start-head h1 {
@@ -418,37 +558,82 @@ onMounted(async () => {
   color: #93a3a8;
 }
 
-.mode-switch {
-  display: flex;
-  gap: 6px;
-  padding: 4px;
-  border: 1px solid rgba(214, 186, 122, 0.28);
-  border-radius: 9px;
-  background: rgba(12, 19, 24, 0.78);
+.start-layout {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
 }
 
-.mode-switch button,
-.segmented button {
+.start-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid rgba(214, 186, 122, 0.28);
+  border-radius: 12px;
+  background: rgba(12, 19, 24, 0.78);
+  backdrop-filter: blur(10px);
+}
+
+.start-nav button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 6px 14px;
+  border-radius: 8px;
+  padding: 9px 12px;
   background: transparent;
   color: #9fadb0;
-  font-size: 12px;
-  letter-spacing: 0.06em;
+  text-align: left;
   cursor: pointer;
 }
 
-.mode-switch button.active {
+.start-nav button.active {
   border-color: rgba(214, 186, 122, 0.55);
-  background: rgba(214, 186, 122, 0.18);
+  background: rgba(214, 186, 122, 0.16);
   color: #f0dfb4;
+}
+
+.nav-title {
+  font-size: 13px;
+  letter-spacing: 0.1em;
+}
+
+.nav-desc {
+  font-size: 10px;
+  color: #7d8d92;
+}
+
+.start-nav button.active .nav-desc {
+  color: #b7a778;
 }
 
 .start-body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(214, 186, 122, 0.45) transparent;
+}
+
+.start-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.start-body::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: rgba(214, 186, 122, 0.35);
+}
+
+.start-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(214, 186, 122, 0.55);
 }
 
 .panel {
@@ -480,6 +665,67 @@ onMounted(async () => {
 .meta {
   font-size: 11px;
   color: #7d8d92;
+}
+
+.tag {
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #9fadb0;
+}
+
+.world-stats {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(8, 13, 17, 0.6);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #7d8d92;
+}
+
+.stat strong {
+  font-size: 18px;
+  font-weight: 500;
+  color: #f0dfb4;
+}
+
+.alliance-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.alliance-chips li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(8, 13, 17, 0.6);
+  font-size: 12px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
 .alliance-list,
@@ -524,7 +770,14 @@ onMounted(async () => {
 }
 
 .segmented button {
+  border: 1px solid transparent;
+  border-radius: 6px;
   padding: 4px 10px;
+  background: transparent;
+  color: #9fadb0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
 }
 
 .segmented button.active {
@@ -567,7 +820,6 @@ onMounted(async () => {
 
 button.ghost,
 .section-actions button,
-.foot-actions button,
 .save-list button {
   border: 1px solid rgba(214, 186, 122, 0.5);
   border-radius: 6px;
@@ -613,26 +865,28 @@ button:disabled {
   background: rgba(12, 19, 24, 0.78);
 }
 
-.foot-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.foot-actions button {
-  padding: 8px 18px;
-  font-size: 13px;
-}
-
 .error {
   font-size: 12px;
   color: #e09191;
 }
 
 @media (max-width: 720px) {
-  .start-head {
-    flex-direction: column;
-    align-items: flex-start;
+  .start-page {
+    padding: 20px 12px 16px;
+  }
+
+  .start-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .start-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .start-nav button {
+    flex: none;
   }
 
   .alliance-list li,

@@ -5,13 +5,12 @@ import { GATE_COLOR, WALL_COLOR, getTerrainLevel, TERRAIN_LEVELS } from '@shared
 import { applyOccupationPatch, decodeMap, decodeSnapshot } from '@shared/codec'
 import { WorldApi } from '@/game/api/client'
 import CharacterForm from './CharacterForm.vue'
+import LlmSettings from './LlmSettings.vue'
 import type {
   CardCreateDTO,
   CharacterCardDTO,
   ControlPatch,
   GameStateDTO,
-  LlmMode,
-  LlmStatusDTO,
   SaveSummaryDTO,
   ServerEvent,
   WorldDTO,
@@ -50,12 +49,8 @@ const teamMessages = ref<ChatMessage[]>([])
 const allianceMessages = ref<ChatMessage[]>([])
 /** 正在回复的发言人，仅同盟与本团频道使用 */
 const typing = ref<{ channel: ChatChannel; author: string } | null>(null)
-const llmStatus = ref<LlmStatusDTO | null>(null)
-const llmDraft = ref({ baseUrl: '', model: '', apiKey: '', mode: 'live' as LlmMode })
+/** 后台决策产生的 LLM 连接错误，展示在设置页的 LLM 面板里 */
 const llmError = ref('')
-const llmNotice = ref('')
-const llmTesting = ref(false)
-const hasSavedKey = computed(() => llmStatus.value?.hasApiKey ?? false)
 const saves = ref<SaveSummaryDTO[]>([])
 const saveLabel = ref('')
 const saveBusy = ref(false)
@@ -157,15 +152,6 @@ watch(
 /* 服务端状态                                                          */
 /* ------------------------------------------------------------------ */
 
-function setLlmStatus(status: LlmStatusDTO): void {
-  llmStatus.value = status
-  llmDraft.value.baseUrl = status.baseUrl
-  llmDraft.value.model = status.model
-  llmDraft.value.apiKey = ''
-  llmDraft.value.mode = status.mode
-  llmError.value = status.lastError ?? ''
-}
-
 function applyWorld(world: WorldDTO): void {
   const state = world.state
   snapshot.value = decodeSnapshot(world.snapshot)
@@ -178,7 +164,7 @@ function applyWorld(world: WorldDTO): void {
   autoInterval.value = state.autoInterval
   agentFaction.value = state.playerFaction
   alliances.value = world.alliances.map((item) => ({ ...item }))
-  setLlmStatus(world.llm)
+  llmError.value = state.llmError ?? ''
   lastOccupationVersion = -1
 }
 
@@ -191,9 +177,6 @@ function applyState(state: GameStateDTO): void {
     agentFaction.value = state.playerFaction
     lastOccupationVersion = -1
     renderer.value?.setDiplomacy(diplomacy.value)
-  }
-  if (llmStatus.value) {
-    llmStatus.value = { ...llmStatus.value, configured: state.llmConfigured }
   }
   llmError.value = state.llmError ?? ''
   renderScene()
@@ -284,61 +267,6 @@ async function sendChat(): Promise<void> {
     chatBusy.value = false
   }
 }
-
-async function saveLlmSettings(): Promise<void> {
-  try {
-    setLlmStatus(
-      await api.setLlm({
-        baseUrl: llmDraft.value.baseUrl,
-        model: llmDraft.value.model,
-        apiKey: llmDraft.value.apiKey,
-        mode: llmDraft.value.mode,
-      }),
-    )
-    llmNotice.value = '设置已保存'
-    errorMessage.value = ''
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'LLM 设置保存失败'
-  }
-}
-
-/** 主动探活；失败时把后端返回的连接错误直接显示在设置面板 */
-async function testLlmSettings(): Promise<void> {
-  if (llmTesting.value) return
-  llmTesting.value = true
-  llmNotice.value = ''
-  try {
-    const result = await api.testLlm()
-    if (result.ok) {
-      llmError.value = ''
-      llmNotice.value =
-        llmDraft.value.mode === 'mock' ? '当前为模拟 LLM，无需联网' : '连接正常'
-    } else {
-      llmError.value = result.error ?? '无法连接 LLM 接口'
-    }
-    errorMessage.value = ''
-  } catch (error) {
-    llmError.value = error instanceof Error ? error.message : '连接测试失败'
-  } finally {
-    llmTesting.value = false
-  }
-}
-
-/** 打开 LLM 页签时拉一次最新状态，避免沿用页面加载时的旧错误 */
-async function refreshLlmStatus(): Promise<void> {
-  try {
-    setLlmStatus(await api.getLlm())
-  } catch {
-    /* 断线时由 SSE 重连逻辑提示，这里保持现状 */
-  }
-}
-
-watch(settingsTab, (tab) => {
-  if (tab === 'llm') {
-    llmNotice.value = ''
-    void refreshLlmStatus()
-  }
-})
 
 /* ------------------------------------------------------------------ */
 /* 推演控制                                                            */
@@ -472,8 +400,14 @@ async function saveCard(payload: CardCreateDTO): Promise<void> {
   cardBusy.value = true
   try {
     cards.value = editingCard.value
-      ? (await api.updateCard(editingCard.value.id, payload)).cards
-      : (await api.createCard(payload)).cards
+      ? (
+          await api.updateCard(editingCard.value.id, {
+            ...payload,
+            active: editingCard.value.active,
+          })
+        ).cards
+      : // 地图内新建即出战，直接生成单位并启动协程
+        (await api.createCard({ ...payload, active: true })).cards
     cardFormOpen.value = false
     errorMessage.value = ''
   } catch (error) {
@@ -751,6 +685,7 @@ onBeforeUnmount(() => {
                 <span class="meta">{{ cardMeta(card) }}</span>
               </div>
               <div class="save-actions">
+                <span v-if="!card.active" class="meta">未加入</span>
                 <button type="button" @click="openEditCard(card)">编辑</button>
               </div>
             </li>
@@ -790,47 +725,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else-if="settingsTab === 'llm'" class="settings-body">
-          <label class="field">
-            <span>模式</span>
-            <select v-model="llmDraft.mode">
-              <option value="live">真实 LLM</option>
-              <option value="mock">模拟 LLM（本地规则，不联网）</option>
-            </select>
-          </label>
-          <template v-if="llmDraft.mode === 'live'">
-            <label class="field">
-              <span>baseUrl</span>
-              <input
-                v-model="llmDraft.baseUrl"
-                type="text"
-                placeholder="https://api.openai.com/v1"
-              />
-            </label>
-            <label class="field">
-              <span>model</span>
-              <input v-model="llmDraft.model" type="text" placeholder="gpt-4o-mini" />
-            </label>
-            <label class="field">
-              <span>apiKey</span>
-              <input
-                v-model="llmDraft.apiKey"
-                type="password"
-                :placeholder="hasSavedKey ? '已保存，留空保持不变' : '仅保存在后端服务'"
-              />
-            </label>
-          </template>
-          <div class="settings-actions">
-            <button type="button" @click="saveLlmSettings">保存</button>
-            <button type="button" class="ghost" :disabled="llmTesting" @click="testLlmSettings">
-              {{ llmTesting ? '测试中…' : '测试连接' }}
-            </button>
-          </div>
-          <p v-if="llmError" class="llm-error">连接失败：{{ llmError }}</p>
-          <p v-else-if="llmNotice" class="llm-ok">{{ llmNotice }}</p>
-          <p class="meta">
-            接口需兼容 OpenAI chat/completions。配置保存在后端，Key 不会下发到浏览器。模拟
-            LLM 完全由服务端本地规则驱动，不发起任何网络请求。
-          </p>
+          <LlmSettings :last-error="llmError" />
         </div>
       </section>
     </div>
@@ -1077,22 +972,6 @@ onBeforeUnmount(() => {
   color: #7d8d92;
 }
 
-.llm-error,
-.llm-ok {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  word-break: break-all;
-}
-
-.llm-error {
-  color: #e09191;
-}
-
-.llm-ok {
-  color: #8fc0a0;
-}
-
 .info {
   top: 128px;
   left: 20px;
@@ -1194,12 +1073,6 @@ onBeforeUnmount(() => {
 .settings-body::-webkit-scrollbar-thumb:hover,
 .help-body::-webkit-scrollbar-thumb:hover {
   background: rgba(214, 186, 122, 0.55);
-}
-
-.settings-actions .ghost {
-  border-color: rgba(255, 255, 255, 0.16);
-  background: transparent;
-  color: #9fadb0;
 }
 
 .comms {

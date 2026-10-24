@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 角色表单：新增与编辑共用，字段与角色属性文档一致。
  * 只负责收集并提交表单，落库与生效时机由调用方决定。
@@ -21,12 +21,16 @@ const props = defineProps<{
   alliances: AllianceConfig[]
   busy: boolean
   error: string
+  /** assign：显示同盟、团与职位；library：只管理角色属性，归属由新游戏分配 */
+  mode?: 'assign' | 'library'
 }>()
 
 const emit = defineEmits<{
   save: [payload: CardCreateDTO]
   close: []
 }>()
+
+const showAssignment = computed(() => (props.mode ?? 'assign') === 'assign')
 
 function blankDraft(): CardCreateDTO {
   return {
@@ -117,28 +121,30 @@ function submit(): void {
           <span>名称</span>
           <input v-model="draft.name" type="text" maxlength="24" placeholder="角色名称" />
         </label>
-        <label class="field">
-          <span>同盟</span>
-          <select v-model="draft.faction">
-            <option v-for="option in factionOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label class="field">
-          <span>团</span>
-          <select v-model="teamValue">
-            <option value="">无团</option>
-            <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
-          </select>
-        </label>
+        <template v-if="showAssignment">
+          <label class="field">
+            <span>同盟</span>
+            <select v-model="draft.faction">
+              <option v-for="option in factionOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>团</span>
+            <select v-model="teamValue">
+              <option value="">无团</option>
+              <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
+            </select>
+          </label>
+        </template>
         <label class="field">
           <span>定位</span>
           <select v-model="draft.role">
             <option v-for="role in GENERAL_ROLES" :key="role" :value="role">{{ role }}</option>
           </select>
         </label>
-        <label class="field">
+        <label v-if="showAssignment" class="field">
           <span>职位</span>
           <select v-model="draft.position">
             <option v-for="position in GENERAL_POSITIONS" :key="position" :value="position">

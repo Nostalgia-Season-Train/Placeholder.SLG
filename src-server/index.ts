@@ -137,6 +137,7 @@ function readCardInput(body: Record<string, unknown>): CardCreateDTO {
     input.dialoguePrompt = body.dialoguePrompt.slice(0, 2000)
   }
   if (typeof body.authorNote === 'string') input.authorNote = body.authorNote.slice(0, 2000)
+  if (typeof body.active === 'boolean') input.active = body.active
   return input
 }
 

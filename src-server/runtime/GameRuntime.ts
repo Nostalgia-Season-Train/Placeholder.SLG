@@ -297,9 +297,10 @@ export class GameRuntime {
     return { cards: listCards() }
   }
 
-  /** Persist a new card, spawn it when it marches, and start its coroutine */
+  /** Persist a new card; it joins the roster only when explicitly marked active */
   createCard(input: CardCreateDTO): CardListDTO {
     const card = insertCard(input)
+    if (!card.active) return this.cardList()
     const spawned = this.sim.spawnFromCard(card)
     const actor = new CharacterAgent(card, this.actorDeps())
     this.actors.push(actor)
@@ -383,8 +384,9 @@ export class GameRuntime {
     const map = loadPresetMap()
     const sim = new MarchSimulation(map, this.simSeed(map), getAlliances(), save?.sim)
     sim.setEventLimit(this.config.eventLimit)
+    const roster = listCards().filter((card) => card.active)
     if (!save) {
-      for (const card of listCards()) sim.spawnFromCard(card)
+      for (const card of roster) sim.spawnFromCard(card)
     }
 
     this.map = map
@@ -406,7 +408,7 @@ export class GameRuntime {
       this.channelLog.welcome(this.config.faction, 0)
     }
 
-    this.actors = listCards().map(
+    this.actors = roster.map(
       (card) =>
         new CharacterAgent(
           card,
@@ -492,7 +494,7 @@ export class GameRuntime {
     const rank = (position: string): number =>
       position === '大臣' ? 0 : position === '团长' ? 1 : 2
     for (const card of listCards()) {
-      if (!enabled.has(card.faction)) continue
+      if (!card.active || !enabled.has(card.faction)) continue
       const current = best.get(card.faction)
       if (!current || rank(card.position) < current.rank) {
         best.set(card.faction, { id: card.id, rank: rank(card.position) })
