@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * 性格选择浮窗：按维度列出标签，同维度互斥、跨维度可叠加。
+ * 性格选择浮窗：按维度列出标签，同维度互斥、跨维度由冲突表决定能否共存。
  * 只负责挑选，确定后由角色表单写入草稿。
  */
 import { computed, ref, watch } from 'vue'
 import {
   PERSONALITY_AXES,
+  personalityAxisOf,
   personalityConflicts,
   personalitySummary,
   type PersonalityTag,
@@ -25,9 +26,20 @@ watch(
   },
 )
 
-/** 每个维度必选一个：点同维度其他标签即替换，点击已选标签保持不变 */
+/** 与已选标签跨维度冲突时才禁用；同维度的其他标签保持可点，用于切换 */
+function isBlocked(tag: PersonalityTag): boolean {
+  return draft.value.some(
+    (item) =>
+      personalityAxisOf(item) !== personalityAxisOf(tag) && personalityConflicts(item, tag),
+  )
+}
+
+/** 每个维度必选一个：点同维度其他标签即替换，点冲突标签无效，点已选标签保持不变 */
 function select(tag: PersonalityTag): void {
-  draft.value = [...draft.value.filter((item) => !personalityConflicts(item, tag)), tag]
+  if (isBlocked(tag)) return
+  const axis = personalityAxisOf(tag)
+  const others = draft.value.filter((item) => personalityAxisOf(item) !== axis)
+  draft.value = [...others, tag]
 }
 
 const summary = computed(() => personalitySummary(draft.value))
@@ -52,7 +64,9 @@ const summary = computed(() => personalitySummary(draft.value))
               v-for="tag in group.tags"
               :key="tag"
               type="button"
-              :class="['tag-btn', { active: draft.includes(tag) }]"
+              :class="['tag-btn', { active: draft.includes(tag), blocked: isBlocked(tag) }]"
+              :disabled="isBlocked(tag)"
+              :title="isBlocked(tag) ? '与已选标签语义冲突' : ''"
               @click="select(tag)"
             >
               {{ tag }}
@@ -176,6 +190,17 @@ const summary = computed(() => personalitySummary(draft.value))
   border-color: #d4b270;
   background: rgba(212, 178, 112, 0.2);
   color: #f3e7c9;
+}
+
+.tag-btn.blocked {
+  cursor: not-allowed;
+  opacity: 0.35;
+  border-style: dashed;
+}
+
+.tag-btn.blocked:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #a9b6b9;
 }
 
 .picker-note {

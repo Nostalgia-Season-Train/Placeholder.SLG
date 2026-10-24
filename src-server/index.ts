@@ -11,7 +11,7 @@ import { closeSaveStore, isValidSaveId } from './runtime/saveStore'
 import { closeCardStore } from './runtime/cardStore'
 import {
   DEFAULT_PERSONALITY,
-  DEFAULT_PERSONALITY_BY_AXIS,
+  defaultTagForAxis,
   FACTIONS,
   GENERAL_POSITIONS,
   GENERAL_ROLES,
@@ -125,7 +125,7 @@ function asTeam(value: unknown): GeneralTeam | null {
   throw new HttpError(400, '未知团')
 }
 
-/** 性格只接受固定标签数组；同一维度内出现多个标签视为冲突 */
+/** 性格只接受固定标签数组；同维度或语义冲突的标签组合一律拒绝 */
 function asPersonality(value: unknown): PersonalityTag[] {
   if (value === undefined || value === null || value === '') return [...DEFAULT_PERSONALITY]
   if (!Array.isArray(value)) throw new HttpError(400, '性格需要标签数组')
@@ -138,14 +138,14 @@ function asPersonality(value: unknown): PersonalityTag[] {
     if (picked.includes(tag)) continue
     const conflict = picked.find((existing) => personalityConflicts(existing, tag))
     if (conflict) {
-      throw new HttpError(400, `性格标签冲突：${conflict} 与 ${tag} 属于同一维度`)
+      throw new HttpError(400, `性格标签冲突：${conflict} 不能与 ${tag} 同时选择`)
     }
     picked.push(tag)
   }
   // 缺失的维度补默认标签，保证每个角色两个维度都有取值
   for (const group of PERSONALITY_AXES) {
     if (picked.some((tag) => group.tags.includes(tag))) continue
-    picked.push(DEFAULT_PERSONALITY_BY_AXIS[group.axis])
+    picked.push(defaultTagForAxis(group.axis, picked))
   }
   return picked
 }

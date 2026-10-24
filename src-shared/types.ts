@@ -194,10 +194,11 @@ export function formatUnitName(
 
 /**
  * 性格标签：按维度分组，同一维度内的标签互斥（如勇猛与怯战），
- * 不同维度可自由组合（如「勇猛 + 突击」）。这样既能表达复杂性格，
- * 又不会出现互相打架的设定。
+ * 不同维度原则上可组合（如「勇猛 + 突击」），但语义相反的组合跨维度也互斥
+ * （如「怯战 + 突击」）。这样既能表达复杂性格，又不会出现互相打架的设定。
+ * 维度命名刻意避开「统兵」语义，因为部分职位并不亲自带兵。
  */
-export type PersonalityAxis = '胆略' | '用兵'
+export type PersonalityAxis = '胆略' | '行动偏好'
 
 export const PERSONALITY_AXES: { axis: PersonalityAxis; tags: PersonalityTag[]; hint: string }[] = [
   {
@@ -206,9 +207,9 @@ export const PERSONALITY_AXES: { axis: PersonalityAxis; tags: PersonalityTag[]; 
     hint: '决定接战的意愿：越靠前越主动求战，越靠后越优先避战',
   },
   {
-    axis: '用兵',
+    axis: '行动偏好',
     tags: ['突击', '拓土', '固守'],
-    hint: '决定目标偏好：突击偏打敌军，拓土偏占空地，固守偏守己方',
+    hint: '决定行动目标：突击偏打敌军，拓土偏占空地，固守偏守己方',
   },
 ]
 
@@ -228,7 +229,7 @@ export const PERSONALITY_TAGS: PersonalityTag[] = PERSONALITY_AXES.flatMap((item
 /** 每个维度的默认标签，保证初始性格两个维度都有取值 */
 export const DEFAULT_PERSONALITY_BY_AXIS: Record<PersonalityAxis, PersonalityTag> = {
   胆略: '稳健',
-  用兵: '拓土',
+  行动偏好: '拓土',
 }
 
 export const DEFAULT_PERSONALITY: PersonalityTag[] = PERSONALITY_AXES.map(
@@ -262,9 +263,32 @@ export function personalityAxisOf(tag: PersonalityTag): PersonalityAxis {
   return PERSONALITY_AXES.find((item) => item.tags.includes(tag))?.axis ?? '胆略'
 }
 
-/** 标签之间是否冲突：同一维度即冲突 */
+/** 跨维度的语义冲突：怯战不突击、谨慎不突击、勇猛不固守 */
+export const PERSONALITY_EXCLUSIONS: readonly (readonly [PersonalityTag, PersonalityTag])[] = [
+  ['怯战', '突击'],
+  ['谨慎', '突击'],
+  ['勇猛', '固守'],
+]
+
+/** 标签之间是否冲突：同维度互斥，跨维度按语义冲突表判定 */
 export function personalityConflicts(a: PersonalityTag, b: PersonalityTag): boolean {
-  return personalityAxisOf(a) === personalityAxisOf(b)
+  if (a === b) return true
+  if (personalityAxisOf(a) === personalityAxisOf(b)) return true
+  return PERSONALITY_EXCLUSIONS.some(
+    ([left, right]) => (left === a && right === b) || (left === b && right === a),
+  )
+}
+
+/** 指定维度在现有标签下的可用默认值：默认标签冲突时取该维度第一个不冲突的标签 */
+export function defaultTagForAxis(
+  axis: PersonalityAxis,
+  picked: PersonalityTag[],
+): PersonalityTag {
+  const candidates = PERSONALITY_AXES.find((item) => item.axis === axis)?.tags ?? []
+  return (
+    candidates.find((tag) => !picked.some((existing) => personalityConflicts(existing, tag))) ??
+    DEFAULT_PERSONALITY_BY_AXIS[axis]
+  )
 }
 
 /** 把一组标签换算为 Bot 决策权重，基线为不偏不倚 */
@@ -301,7 +325,7 @@ export function normalizePersonality(value: string | string[] | null | undefined
   // 缺失的维度补默认标签，旧档只有一个维度时也能得到完整组合
   for (const group of PERSONALITY_AXES) {
     if (picked.some((tag) => group.tags.includes(tag))) continue
-    picked.push(DEFAULT_PERSONALITY_BY_AXIS[group.axis])
+    picked.push(defaultTagForAxis(group.axis, picked))
   }
   return picked
 }
