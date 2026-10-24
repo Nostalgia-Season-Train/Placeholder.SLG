@@ -211,6 +211,24 @@ export class TerrainLayer {
           scale: 1,
           color: GATE_COLOR,
         })
+        // 道路穿过关口：在关口顶面向两侧道路各铺半段，路面跨过关卡保持连续
+        const gateRoadColor = tint(0x8d7a55, rand, 0.06)
+        for (const neighbor of roadLinks.get(tileKey(tile.q, tile.r)) ?? []) {
+          if (!neighbor.isRoad) continue
+          const dx = neighbor.x - tile.x
+          const dz = neighbor.z - tile.z
+          const length = Math.hypot(dx, dz)
+          const ux = dx / length
+          const uz = dz / length
+          roadStrips.push({
+            x: tile.x + ux * (ROAD_APOTHEM / 2),
+            y: top + 0.012,
+            z: tile.z + uz * (ROAD_APOTHEM / 2),
+            rotY: Math.atan2(-uz, ux),
+            scale: 1,
+            color: gateRoadColor,
+          })
+        }
         continue
       }
 
@@ -364,6 +382,7 @@ function roadEdgeKey(a: MapTile, b: MapTile): string {
  * 道路渲染用的连接关系：先取生成树保证每个连通块完整，
  * 再补回不封闭成三角形的边，保留转弯与 Y 形岔口。
  * 三格两两相邻时只画其中两条，否则路面会填成三角形色块。
+ * 关口视为道路的连通节点，让两侧路面跨过关卡接成一条。
  */
 function buildRoadLinks(map: MapData): Map<string, MapTile[]> {
   const links = new Map<string, MapTile[]>()
@@ -384,13 +403,14 @@ function buildRoadLinks(map: MapData): Map<string, MapTile[]> {
   }
 
   const rootKey = (tile: MapTile) => tileKey(tile.q, tile.r)
+  const isRoadLike = (tile: MapTile) => tile.isRoad || tile.isGate
   const roadAt = (q: number, r: number) => {
     const tile = map.tileMap.get(tileKey(q, r))
-    return tile?.isRoad ? tile : null
+    return tile && isRoadLike(tile) ? tile : null
   }
 
   for (const tile of map.tiles) {
-    if (!tile.isRoad) continue
+    if (!isRoadLike(tile)) continue
     if (visited.has(rootKey(tile))) continue
     visited.add(rootKey(tile))
     const queue = [tile]
@@ -409,7 +429,7 @@ function buildRoadLinks(map: MapData): Map<string, MapTile[]> {
   }
 
   for (const tile of map.tiles) {
-    if (!tile.isRoad) continue
+    if (!isRoadLike(tile)) continue
     for (const offset of ROAD_NEIGHBORS) {
       const next = roadAt(tile.q + offset.q, tile.r + offset.r)
       if (!next || edges.has(roadEdgeKey(tile, next))) continue

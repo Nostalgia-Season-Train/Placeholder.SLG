@@ -185,10 +185,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   }
 
   if (method === 'POST' && path === '/api/world/reset') {
-    const body = await readJson(request)
-    const seed = typeof body.seed === 'number' ? body.seed : Number(body.seed)
-    if (!Number.isFinite(seed) || seed <= 0) throw new HttpError(400, '种子必须是正数')
-    json(response, 200, runtime.reset(seed))
+    json(response, 200, runtime.reset())
     return
   }
 

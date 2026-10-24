@@ -33,11 +33,9 @@ const host = ref<HTMLDivElement | null>(null)
 const renderer = shallowRef<MapRenderer | null>(null)
 const snapshot = shallowRef<SimSnapshot | null>(null)
 const hover = ref<HoverInfo | null>(null)
-const seed = ref(20261021)
 const tileCount = ref(0)
 const running = ref(true)
 const speed = ref(650)
-const seedDraft = ref(String(seed.value))
 const settingsOpen = ref(false)
 const settingsTab = ref<SettingsTab>('march')
 const helpOpen = ref(false)
@@ -175,8 +173,6 @@ function applyWorld(world: WorldDTO): void {
   worldMessages.value = world.chat.world
   teamMessages.value = world.chat.team
   allianceMessages.value = world.chat.alliance
-  seed.value = state.seed
-  seedDraft.value = String(state.seed)
   running.value = state.running
   speed.value = state.speed
   autoCommand.value = state.autoCommand
@@ -328,17 +324,14 @@ function onFactionChange(): void {
 }
 
 async function resetWorld(): Promise<void> {
-  const typed = Number.parseInt(seedDraft.value, 10)
-  const nextSeed =
-    Number.isFinite(typed) && typed > 0 ? typed : Math.floor(Math.random() * 1_000_000_000)
   try {
-    const world = await api.reset(nextSeed)
+    const world = await api.reset()
     applyWorld(world)
     renderer.value?.setMap(decodeMap(world.map))
     renderScene()
     errorMessage.value = ''
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '重新生成失败'
+    errorMessage.value = error instanceof Error ? error.message : '重新开局失败'
   }
 }
 
@@ -489,7 +482,6 @@ onMounted(async () => {
         hover.value = info
       },
       onReady: (stats) => {
-        seed.value = stats.seed
         tileCount.value = stats.tiles
       },
     })
@@ -782,15 +774,10 @@ onBeforeUnmount(() => {
               <option :value="20">约 20 回合</option>
             </select>
           </label>
-          <label class="field">
-            <span>地图种子</span>
-            <input v-model="seedDraft" type="number" min="1" />
-          </label>
           <div class="settings-actions">
-            <button type="button" @click="resetWorld">按种子重新生成</button>
-            <span class="meta">当前种子 {{ seed }}</span>
+            <button type="button" @click="resetWorld">重新开局</button>
           </div>
-          <p class="meta">重新生成会清空当前推演进度与频道消息。</p>
+          <p class="meta">重新开局会清空当前推演进度与频道消息，地图保持固定预制。</p>
         </div>
 
         <div v-else-if="settingsTab === 'card'" class="settings-body">
@@ -809,7 +796,7 @@ onBeforeUnmount(() => {
             </li>
           </ul>
           <p class="meta">
-            职位为「无」的角色保存后立即进驻地图；大臣与团长坐镇指挥，不亲自上前线。重新生成世界时全部角色重新进驻。
+            职位为「无」的角色保存后立即进驻地图；大臣与团长坐镇指挥，不亲自上前线。重新开局时全部角色重新进驻。
           </p>
         </div>
 
@@ -827,7 +814,7 @@ onBeforeUnmount(() => {
               <div class="save-info">
                 <strong>{{ item.label }}</strong>
                 <span class="meta">
-                  第 {{ item.round }} 回合 · {{ formatSavedAt(item.savedAt) }} · 种子 {{ item.seed }}
+                  第 {{ item.round }} 回合 · {{ formatSavedAt(item.savedAt) }}
                 </span>
               </div>
               <div class="save-actions">
@@ -958,7 +945,7 @@ onBeforeUnmount(() => {
           <p class="meta">
             指令支持方向（东南西北 / 上下左右）、姿态（进攻、防守、待命、撤退、自由行动）与坐标（如 12,8）。
           </p>
-          <p class="meta">地块 {{ tileCount }} · 种子 {{ seed }}</p>
+          <p class="meta">地块 {{ tileCount }}</p>
         </div>
       </section>
     </div>

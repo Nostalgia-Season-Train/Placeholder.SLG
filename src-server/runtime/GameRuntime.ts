@@ -5,7 +5,8 @@
  * 两条循环分工：世界回合循环推进 sim.step() 并广播回合信号，每个角色协程只负责
  * 判定决策时机、组装上下文、调用 LLM、写回指令与发言（见《角色行动》2.4）。
  */
-import { generateMap, type MapData } from '../../src-shared/map/MapGenerator'
+import { loadPresetMap } from '../../src-shared/map/presetMap'
+import type { MapData } from '../../src-shared/map/MapGenerator'
 import { MarchSimulation, type SimSignal } from '../game/bot/simulation'
 import { FACTIONS, type BotOrder, type Faction } from '../../src-shared/types'
 import { CharacterAgent, type ActorDeps, type AgentOrderDraft } from '../game/agent/actor'
@@ -54,7 +55,6 @@ interface RuntimeConfig {
   autoCommand: boolean
   autoInterval: number
   faction: Faction
-  seed: number
 }
 
 export class GameRuntime {
@@ -74,7 +74,6 @@ export class GameRuntime {
     autoCommand: true,
     autoInterval: 10,
     faction: 'red',
-    seed: 20261021,
   }
 
   private worldVersion = 1
@@ -122,7 +121,7 @@ export class GameRuntime {
       autoCommand: this.config.autoCommand,
       autoInterval: this.config.autoInterval,
       faction: this.config.faction,
-      seed: this.config.seed,
+      seed: this.map.seed,
       llmConfigured: llmStatus().configured,
     }
   }
@@ -161,12 +160,11 @@ export class GameRuntime {
     return state
   }
 
-  reset(seed: number): WorldDTO {
+  reset(): WorldDTO {
     this.runId += 1
     this.stopTimer()
     this.stopActors()
     this.worldVersion += 1
-    this.config.seed = Number.isFinite(seed) && seed > 0 ? Math.floor(seed) : this.config.seed
 
     this.buildWorld(null)
 
@@ -248,7 +246,7 @@ export class GameRuntime {
         autoCommand: this.config.autoCommand,
         autoInterval: this.config.autoInterval,
         faction: this.config.faction,
-        seed: this.config.seed,
+        seed: this.map.seed,
       },
       sim,
       chat: this.saveChat(),
@@ -341,7 +339,7 @@ export class GameRuntime {
   /* ------------------------------------------------------------------ */
 
   private buildWorld(save: WorldSaveDTO | null): void {
-    const map = generateMap(this.config.seed)
+    const map = loadPresetMap()
     const sim = new MarchSimulation(map, this.simSeed(map), save?.sim)
     sim.setEventLimit(this.config.eventLimit)
     if (!save) {
@@ -423,7 +421,6 @@ export class GameRuntime {
     this.config.autoCommand = state.autoCommand
     this.config.autoInterval = state.autoInterval
     this.config.faction = state.faction
-    this.config.seed = state.seed
     this.worldVersion = state.worldVersion
   }
 
