@@ -6,7 +6,7 @@
  * 因此寻路与遭遇战的随机数消费顺序不随协程调度漂移，战报与存档保持确定性。
  */
 import { axialToWorld } from '../../../src-shared/map/hex'
-import { coordKey, getTile, hexDistance, type TileInfo, type WorldTerrain } from '../bot/terrain'
+import { coordKey, getTile, hexDistance, neighbors, type TileInfo, type WorldTerrain } from '../bot/terrain'
 import {
   allianceNameOf,
   FACTIONS,
@@ -76,14 +76,19 @@ const STANCE_LABELS: Record<BotStance, string> = {
   defend: '防守',
   hold: '待命',
   retreat: '撤退',
+  buildFortress: '筑垒',
 }
 
-const VALID_STANCES: BotStance[] = ['auto', 'attack', 'defend', 'hold', 'retreat']
+const VALID_STANCES: BotStance[] = ['auto', 'attack', 'defend', 'hold', 'retreat', 'buildFortress']
 
 const AUTO_DIRECTIVE = '根据当前战况推进，优先夺取价值高且易守的地块'
 
 /** 失败后的冷却回合数 */
 const FAILURE_COOLDOWN = 3
+/** 模拟 AI 自主筑垒的额度：超过这个数量就不再主动修新工事 */
+const FORT_AUTO_LIMIT = 2
+/** 模拟 AI 主动筑垒时愿意赶路的距离 */
+const FORT_AUTO_RANGE = 10
 /** 同一角色两次关键点决策之间的最小间隔：期间的关键点合并，避免遭遇战刷屏占满 LLM */
 const KEYPOINT_GAP = 20
 /** 世界频道发言的基准间隔 */
@@ -95,7 +100,8 @@ const SYSTEM_PROMPT = `你是大地图上的一个角色，由 LLM 扮演，Bot 
 1. 只指挥本同盟的 Bot。orders 里的 generalId 必须来自「己方单位」，每个单位最多一条。
 2. 职位决定指挥范围：大臣可指挥本同盟全部单位，团长可指挥本团团员，无职位者只能指挥自己的单位。
 3. 定位决定行为边界：武将、术武将可前线带兵；法师、疗愈师不统兵，只发言不下达带兵指令。
-4. stance 取 attack / defend / hold / retreat / auto。attack / defend / retreat 必须给出 target，且来自「可占领候选」或己方地块。
+4. stance 取 attack / defend / hold / retreat / buildFortress / auto。attack / defend / retreat / buildFortress 必须给出 target，且来自「可占领候选」或己方地块。
+   buildFortress 表示在目标格筑垒：目标必须是道路或关口，且远离主城，建成后会挡住敌方推进。工程档位越高，筑垒越快、拆除工事越强。要塞用来封锁要道，优先修在关口本身或紧邻关口的道路上。
 5. 发言使用角色自己的口吻，承接「环境上下文」里的对话；不要重复已经说过的话，不得与「自身上下文」里的发言雷同，也不要反复使用同一种比喻或句式。
 6. 说话像在频道里跟同僚聊天：用日常词、短句，可以有语气词，别写成檄文或诗。不用文言式缩略和四字词堆叠（如「固已得」「探林缘」「狼烟咬根」），不生造意象，不自称臣、本座之类的古称。
    正例「北边那片丘陵快顶不住了，我让朔风补一手」「先守住现有这几个点，别急着抢」；反例「北侧丘陵狼烟咬根，朔风既已合拢」。
@@ -119,6 +125,7 @@ const WORLD_RULE = `
 本轮触发为世界发言：只在世界频道发一条简短战报或宣言，不下达任何指令。`
 
 function detectStance(text: string): BotStance {
+  if (/筑垒|筑城|修垒|营寨|要塞|工事/.test(text)) return 'buildFortress'
   if (/待命|停止|原地|待机|不动|按兵/.test(text)) return 'hold'
   if (/撤|退|回防|收缩/.test(text)) return 'retreat'
   if (/守|防|驻|护|固守/.test(text)) return 'defend'
@@ -462,6 +469,11 @@ export class CharacterAgent {
         if (!target || !getTile(this.deps.terrain, target)?.passable) continue
       }
 
+      if (stance === 'buildFortress') {
+        const tile = target ? getTile(this.deps.terrain, target) : undefined
+        if (!tile?.road && !tile?.gate) continue
+      }
+
       orders.push({
         generalId,
         stance,
@@ -562,7 +574,8 @@ export class CharacterAgent {
     }
 
     const directive = trigger.kind === 'player' ? (trigger.items[0]?.text ?? '') : AUTO_DIRECTIVE
-    const stance = detectStance(directive)
+    // 例行决策一律按自主行动处理，避免把「优先夺取价值高且易守的地块」误判成防守指令
+    const stance: BotStance = trigger.kind === 'player' ? detectStance(directive) : 'auto'
     const direction = detectDirection(directive)
     const explicit = detectCoord(directive)
     const explicitTile = explicit ? getTile(this.deps.terrain, explicit) : undefined
@@ -571,19 +584,111 @@ export class CharacterAgent {
     const ownPool = this.ownTiles(snapshot)
     const used = new Set<string>()
     const orders: AgentOrderDraft[] = []
+    const commandables = this.commandableGenerals(snapshot)
 
-    for (const general of this.commandableGenerals(snapshot)) {
+    // 模拟 AI 的自主决策：己方工事不足时，派最合适的角色去封锁关口
+    let autoFortGeneralId: string | null = null
+    let autoFortTarget: Coord | null = null
+    if (stance === 'auto') {
+      const ownForts = snapshot.forts.filter((fort) => fort.faction === this.card.faction).length
+      if (ownForts < FORT_AUTO_LIMIT) {
+        const candidates = this.fortCandidates(snapshot)
+        const choose = (
+          list: typeof candidates,
+          maxRange: number,
+        ): { generalId: string; target: Coord } | null => {
+          let pick: GeneralState | null = null
+          let target: Coord | null = null
+          let pickDistance = Infinity
+          for (const entry of list) {
+            for (const general of commandables) {
+              if (general.status === 'fighting' || general.status === 'resting') continue
+              const distance = hexDistance(general.coord, entry.tile.coord)
+              if (distance <= maxRange && distance < pickDistance) {
+                pickDistance = distance
+                pick = general
+                target = { ...entry.tile.coord }
+              }
+            }
+          }
+          return pick && target ? { generalId: pick.id, target } : null
+        }
+        // 关口是封锁要道的关键位置，值得让角色专程赶过去；附近没有关口工地时退回近处道路
+        const fortPick =
+          choose(candidates.filter((entry) => entry.nearGate), Infinity) ?? choose(candidates, FORT_AUTO_RANGE)
+        if (fortPick) {
+          autoFortGeneralId = fortPick.generalId
+          autoFortTarget = fortPick.target
+        }
+      }
+    }
+
+    for (const general of commandables) {
+      // 模拟 AI 的例行决策不打断正在进行的筑垒：沿用原工地，否则永远建不完
+      const inProgress = general.order
+      if (stance === 'auto' && inProgress?.stance === 'buildFortress' && inProgress.target) {
+        used.add(coordKey(inProgress.target))
+        orders.push({
+          generalId: general.id,
+          stance: 'buildFortress',
+          target: { ...inProgress.target },
+          reason: '继续筑垒',
+        })
+        continue
+      }
+
+      if (stance === 'auto' && general.id === autoFortGeneralId && autoFortTarget) {
+        used.add(coordKey(autoFortTarget))
+        orders.push({
+          generalId: general.id,
+          stance: 'buildFortress',
+          target: { ...autoFortTarget },
+          reason: '封锁要道',
+        })
+        continue
+      }
+
       if (stance === 'hold' || stance === 'auto') {
         orders.push({ generalId: general.id, stance, target: null, reason: '保持现状' })
         continue
       }
 
-      if (explicitTile?.passable) {
+      if (explicitTile?.passable && (stance !== 'buildFortress' || explicitTile.road || explicitTile.gate)) {
         orders.push({
           generalId: general.id,
           stance,
           target: { ...explicitTile.coord },
           reason: '按指定坐标行动',
+        })
+        continue
+      }
+
+      if (stance === 'buildFortress') {
+        let best: { tile: TileInfo; score: number } | null = null
+        let bestScore = -Infinity
+
+        for (const entry of this.fortCandidates(snapshot)) {
+          const key = coordKey(entry.tile.coord)
+          if (used.has(key)) continue
+          const distance = hexDistance(general.coord, entry.tile.coord)
+          const score = entry.score - distance * 0.8
+          if (score > bestScore) {
+            bestScore = score
+            best = entry
+          }
+        }
+
+        if (!best) {
+          orders.push({ generalId: general.id, stance: 'auto', target: null, reason: '附近没有适合筑垒的位置' })
+          continue
+        }
+
+        used.add(coordKey(best.tile.coord))
+        orders.push({
+          generalId: general.id,
+          stance: 'buildFortress',
+          target: { ...best.tile.coord },
+          reason: `在${best.tile.name}筑垒`,
         })
         continue
       }
@@ -732,6 +837,35 @@ export class CharacterAgent {
       if (tile?.passable) tiles.push({ tile, score: tile.value })
     }
     return tiles
+  }
+
+  /** 可筑垒的道路与关口：己方或中立、远离主城、无要塞与单位；关口及靠近关口的位置优先 */
+  private fortCandidates(snapshot: SimSnapshot): { tile: TileInfo; score: number; nearGate: boolean }[] {
+    const faction = this.card.faction
+    const blocked = new Set<string>()
+    for (const city of snapshot.cities) {
+      blocked.add(coordKey(city.coord))
+      for (const neighbor of neighbors(city.coord)) blocked.add(coordKey(neighbor))
+    }
+    for (const fort of snapshot.forts) blocked.add(coordKey(fort.coord))
+    for (const general of snapshot.generals) blocked.add(coordKey(general.coord))
+    for (const minion of snapshot.minions) blocked.add(coordKey(minion.coord))
+
+    // 要塞用于封锁通道，关口本身价值最高，其次是紧邻关口的道路
+    const gates = this.deps.terrain.capturable.filter((tile) => tile.gate).map((tile) => tile.coord)
+
+    const result: { tile: TileInfo; score: number; nearGate: boolean }[] = []
+    for (const tile of this.deps.terrain.capturable) {
+      if (!tile.road && !tile.gate) continue
+      if (blocked.has(coordKey(tile.coord))) continue
+      const owner = snapshot.occupation.get(coordKey(tile.coord))
+      if (owner && owner !== faction) continue
+      const gateDistance = gates.length === 0 ? Infinity : Math.min(...gates.map((gate) => hexDistance(tile.coord, gate)))
+      const bonus = tile.gate ? 30 : gateDistance <= 1 ? 20 : gateDistance <= 2 ? 10 : 0
+      result.push({ tile, score: tile.value + bonus, nearGate: bonus > 0 })
+    }
+    result.sort((a, b) => b.score - a.score)
+    return result
   }
 }
 

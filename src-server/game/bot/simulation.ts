@@ -25,6 +25,7 @@ import {
   type CardSpawn,
   type Faction,
   type Coord,
+  type FortState,
   type GeneralState,
   type GeneralRole,
   type MinionState,
@@ -36,7 +37,7 @@ import {
 } from '../../../src-shared/types'
 
 /** Stances that require the bot to march to an explicit tile */
-const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat']
+const TARGETED_STANCES: BotStance[] = ['attack', 'defend', 'retreat', 'buildFortress']
 
 /** 关键点信号：交给角色协程判断，本身不参与推演、不消费随机数 */
 export type SimSignalKind = 'encounter' | 'capture' | 'defeat' | 'blocked' | 'lost'
@@ -62,6 +63,19 @@ const MINION_DAMAGE = 7
 const MINION_CITY_DAMAGE = 8
 const CITY_MAX_HP = 600
 const MAX_MINIONS_PER_FACTION = 15
+
+/**
+ * 要塞：由角色在道路或关口上驻留建造，建成后占格阻断敌方兵线，
+ * 敌方必须先摧毁要塞才能继续沿路进攻。被摧毁后永久消失。
+ */
+const FORT_MAX_HP = 360
+const FORT_MAX_PER_FACTION = 6
+/** 工程档位 → 建造所需 Tick */
+const FORT_BUILD_COST: Record<StatGrade, number> = { 低: 18, 中: 12, 高: 8 }
+/** 工程档位 → 对要塞与主城城防的每 Tick 伤害 */
+const FORT_DAMAGE: Record<StatGrade, number> = { 低: 4, 中: 7, 高: 11 }
+/** 小兵对要塞的每 Tick 伤害 */
+const MINION_FORT_DAMAGE = 6
 
 /** 兵线战报：小兵全灭或主城易手时写入，由运行时转发到世界频道 */
 export interface SimReport {
@@ -100,6 +114,8 @@ function cloneGeneral(general: GeneralState): GeneralState {
     position: general.position ?? '无',
     team: general.team ?? null,
     role,
+    // 旧存档没有工程字段，按中档处理
+    engineering: general.engineering ?? '中',
     maxHp,
     hp: general.hp ?? maxHp,
     // 旧存档没有 Tick 字段，按未移动处理
@@ -127,6 +143,10 @@ function cloneMinion(minion: MinionState): MinionState {
   }
 }
 
+function cloneFort(fort: FortState): FortState {
+  return { ...fort, coord: { ...fort.coord } }
+}
+
 export class MarchSimulation {
   readonly terrain: WorldTerrain
   private readonly rng: SeedRandom
@@ -135,6 +155,7 @@ export class MarchSimulation {
   private readonly cities: BaseCity[]
   private readonly generals: GeneralState[]
   private readonly minions: MinionState[] = []
+  private readonly forts: FortState[] = []
   private readonly occupation = new Map<string, Faction>()
   private readonly events: SimEvent[] = []
   private readonly signals: SimSignal[] = []
@@ -160,6 +181,7 @@ export class MarchSimulation {
       }))
       this.generals = restore.generals.map(cloneGeneral)
       for (const minion of restore.minions ?? []) this.minions.push(cloneMinion(minion))
+      for (const fort of restore.forts ?? []) this.forts.push(cloneFort(fort))
       for (const [key, faction] of restore.occupation) this.occupation.set(key, faction)
       this.round = restore.round
       this.occupationVersion = restore.occupationVersion
@@ -183,6 +205,7 @@ export class MarchSimulation {
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       generals: this.generals.map(cloneGeneral),
       minions: this.minions.map(cloneMinion),
+      forts: this.forts.map(cloneFort),
       occupation: [...this.occupation.entries()],
       events: this.events.map((event) => ({ ...event })),
     }
@@ -224,6 +247,10 @@ export class MarchSimulation {
       if (unit.kind === 'minion' && !fighters.includes(unit)) unit.unit.engagedSince = 0
     }
 
+    // 工事：先推进建造进度，再结算对要塞与主城的工程伤害（均不消费随机数）
+    this.advanceFortBuilds()
+    this.resolveFortSieges(locked)
+
     for (const general of this.generals) {
       if (locked.has(general.id)) continue
       this.act(general)
@@ -239,6 +266,13 @@ export class MarchSimulation {
   setOrder(generalId: string, order: BotOrder): boolean {
     const general = this.generals.find((item) => item.id === generalId)
     if (!general) return false
+
+    // 换指令即放弃在建工事；重新下达同一筑垒目标时保留已完成进度
+    this.cancelBuilderForts(
+      general.id,
+      '收到新指令',
+      order.stance === 'buildFortress' ? order.target ?? undefined : undefined,
+    )
 
     general.order = order
     general.captureProgress = 0
@@ -280,6 +314,7 @@ export class MarchSimulation {
       })),
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       minions: this.minions.map(cloneMinion),
+      forts: this.forts.map(cloneFort),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
       events: this.events.slice(-this.eventLimit).reverse(),
@@ -352,6 +387,7 @@ export class MarchSimulation {
       position: card.position,
       team: card.team ?? null,
       role: card.role,
+      engineering: card.engineering ?? '中',
       coord: { ...spawn },
       power,
       hp: maxHp,
@@ -384,6 +420,7 @@ export class MarchSimulation {
   private cityOutskirt(coord: Coord, taken: Set<string>): Coord | null {
     for (const neighbor of neighbors(coord)) {
       if (taken.has(coordKey(neighbor))) continue
+      if (this.readyFortAt(neighbor)) continue
       const tile = getTile(this.terrain, neighbor)
       if (!tile?.passable) continue
       return { ...neighbor }
@@ -401,6 +438,24 @@ export class MarchSimulation {
 
   private cityAt(coord: Coord): BaseCity | undefined {
     return this.cities.find((city) => coordKey(city.coord) === coordKey(coord))
+  }
+
+  private fortAt(coord: Coord): FortState | undefined {
+    return this.forts.find((fort) => coordKey(fort.coord) === coordKey(coord))
+  }
+
+  /** 只返回已建成的要塞：半成品只做展示，不阻断、不可攻击 */
+  private readyFortAt(coord: Coord): FortState | undefined {
+    return this.forts.find((fort) => fort.status === 'ready' && coordKey(fort.coord) === coordKey(coord))
+  }
+
+  /** 敌方已建成的要塞占格不可通行；归属方与其友军可正常通行 */
+  private blockedFor(faction: Faction): (coord: Coord) => boolean {
+    const hostile = this.hostileFactions(faction)
+    return (coord) => {
+      const fort = this.readyFortAt(coord)
+      return fort !== undefined && hostile.has(fort.faction)
+    }
   }
 
   private nameOf(faction: Faction): string {
@@ -518,6 +573,12 @@ export class MarchSimulation {
       city = route.city
     }
 
+    // 挡在路上的敌方要塞：先拆要塞，既不能前进也不能越过它攻城
+    if (this.adjacentEnemyFort(minion.faction, minion.coord, minion.path[0])) {
+      minion.status = 'sieging'
+      return
+    }
+
     if (hexDistance(minion.coord, city.coord) <= 1) {
       minion.status = 'sieging'
       this.siegeCity(city, minion.faction)
@@ -582,6 +643,233 @@ export class MarchSimulation {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Fortifications                                                      */
+  /* ------------------------------------------------------------------ */
+
+  /** 相邻（≤1 格）的敌方已建成要塞；优先返回挡在当前路径上的那座 */
+  private adjacentEnemyFort(faction: Faction, coord: Coord, preferred?: Coord): FortState | null {
+    const hostile = this.hostileFactions(faction)
+    const candidates = this.forts.filter(
+      (fort) =>
+        fort.status === 'ready' &&
+        hostile.has(fort.faction) &&
+        hexDistance(fort.coord, coord) <= 1,
+    )
+    if (candidates.length === 0) return null
+    if (preferred) {
+      const ahead = candidates.find((fort) => coordKey(fort.coord) === coordKey(preferred))
+      if (ahead) return ahead
+    }
+    return candidates[0]!
+  }
+
+  private adjacentEnemyCity(faction: Faction, coord: Coord): BaseCity | null {
+    const hostile = this.hostileFactions(faction)
+    for (const city of this.cities) {
+      if (!hostile.has(city.owner)) continue
+      if (hexDistance(city.coord, coord) <= 1) return city
+    }
+    return null
+  }
+
+  /**
+   * 工程结算：被交战锁定的单位本 Tick 先解决遭遇战，不攻击工事。
+   * 小兵与角色相邻敌方要塞即可拆除；角色没有要塞可拆时攻击相邻敌对主城的城防。
+   * 顺序固定（小兵 → 角色，各自按数组顺序），伤害同时生效，不消费随机数。
+   */
+  private resolveFortSieges(locked: Set<string>): void {
+    const fortIncoming = new Map<FortState, { damage: number; attacker: Faction }>()
+    const cityIncoming = new Map<BaseCity, { damage: number; attacker: Faction }>()
+
+    const addFort = (fort: FortState, damage: number, attacker: Faction): void => {
+      const entry = fortIncoming.get(fort)
+      if (entry) entry.damage += damage
+      else fortIncoming.set(fort, { damage, attacker })
+    }
+    const addCity = (city: BaseCity, damage: number, attacker: Faction): void => {
+      const entry = cityIncoming.get(city)
+      if (entry) entry.damage += damage
+      else cityIncoming.set(city, { damage, attacker })
+    }
+
+    for (const minion of this.minions) {
+      if (locked.has(minion.id)) continue
+      const fort = this.adjacentEnemyFort(minion.faction, minion.coord, minion.path[0])
+      if (fort) addFort(fort, MINION_FORT_DAMAGE, minion.faction)
+    }
+
+    for (const general of this.generals) {
+      if (locked.has(general.id) || general.restTurns > 0) continue
+      const fort = this.adjacentEnemyFort(general.faction, general.coord)
+      if (fort) {
+        addFort(fort, FORT_DAMAGE[general.engineering], general.faction)
+        continue
+      }
+      const city = this.adjacentEnemyCity(general.faction, general.coord)
+      if (city) addCity(city, FORT_DAMAGE[general.engineering], general.faction)
+    }
+
+    for (const [fort, entry] of fortIncoming) {
+      fort.hp = Math.max(0, fort.hp - entry.damage)
+      if (fort.hp > 0) continue
+      this.destroyFort(fort, entry.attacker)
+    }
+
+    for (const [city, entry] of cityIncoming) {
+      city.hp = Math.max(0, city.hp - entry.damage)
+      if (city.hp <= 0) this.captureCity(city, entry.attacker)
+    }
+  }
+
+  /** 建造中的要塞每 Tick 累积 1 点进度；建造者必须仍在格上并保持筑垒指令 */
+  private advanceFortBuilds(): void {
+    for (const fort of [...this.forts]) {
+      if (fort.status !== 'building') continue
+
+      const builder = this.generals.find((general) => general.id === fort.builderId)
+      if (!builder) {
+        this.cancelFort(fort, '建造者已不在战场')
+        continue
+      }
+
+      const holding =
+        coordKey(builder.coord) === coordKey(fort.coord) &&
+        builder.order?.stance === 'buildFortress' &&
+        builder.order.target !== null &&
+        coordKey(builder.order.target) === coordKey(fort.coord)
+      if (!holding) {
+        this.cancelFort(fort, `${builder.name}离开建造位置`)
+        continue
+      }
+
+      fort.progress += 1
+      if (fort.progress < fort.buildCost) continue
+
+      fort.progress = fort.buildCost
+      fort.status = 'ready'
+      fort.builtRound = this.round
+      this.occupation.set(coordKey(fort.coord), fort.faction)
+      this.occupationVersion += 1
+
+      const text = `${this.nameOf(fort.faction)}的${builder.name}建成要塞（${fort.coord.q},${fort.coord.r}）`
+      this.log(fort.faction, text)
+      this.reports.push({ round: this.round, faction: fort.faction, text })
+      this.signal('capture', fort.faction, builder.id, '要塞建成', `${builder.name}建成要塞`)
+    }
+  }
+
+  /** 角色抵达筑垒目标格：校验通过后开工，站上目标格的当前 Tick 即算第 1 点进度 */
+  private startFort(general: GeneralState): void {
+    const target = general.order?.target
+    if (!target) {
+      general.order = null
+      return
+    }
+
+    const existing = this.fortAt(target)
+    if (existing) {
+      // 正在由自己建造：继续累积进度
+      if (existing.status === 'building' && existing.builderId === general.id) {
+        general.status = 'capturing'
+        return
+      }
+      // 该格已有要塞（含自己刚建成的）：指令完成，原地驻守
+      general.order = null
+      general.target = null
+      general.path = []
+      general.status = 'garrison'
+      return
+    }
+
+    const reason = this.fortBlockReason(general, target)
+    if (reason) {
+      general.order = null
+      general.target = null
+      general.path = []
+      general.status = 'idle'
+      this.signal('blocked', general.faction, general.id, '无法筑垒', `${general.name}${reason}`)
+      return
+    }
+
+    this.forts.push({
+      id: `fort-${this.round}-${general.id}`,
+      faction: general.faction,
+      coord: { ...target },
+      hp: FORT_MAX_HP,
+      maxHp: FORT_MAX_HP,
+      status: 'building',
+      progress: 1,
+      buildCost: FORT_BUILD_COST[general.engineering],
+      builderId: general.id,
+      builtRound: 0,
+    })
+
+    general.captureProgress = 0
+    general.status = 'capturing'
+    this.log(general.faction, `${general.name}在（${target.q},${target.r}）开始筑垒`)
+  }
+
+  /** 筑垒位置合法性：返回不可建的原因，合法时返回 null */
+  private fortBlockReason(general: GeneralState, coord: Coord): string | null {
+    const tile = getTile(this.terrain, coord)
+    if (!tile?.passable || (!tile.road && !tile.gate)) return '只能在道路或关口上筑垒'
+    if (this.cityAt(coord)) return '无法在主城格筑垒'
+
+    for (const city of this.cities) {
+      if (hexDistance(city.coord, coord) <= 1) return '距主城太近，无法筑垒'
+    }
+
+    const owner = this.occupation.get(coordKey(coord))
+    if (owner && owner !== general.faction) return '只能在自己或中立地块上筑垒'
+
+    const occupied =
+      this.generals.some(
+        (other) => other !== general && coordKey(other.coord) === coordKey(coord),
+      ) || this.minions.some((minion) => coordKey(minion.coord) === coordKey(coord))
+    if (occupied) return '目标地块上还有其他单位'
+
+    const mine = this.forts.filter((fort) => fort.faction === general.faction).length
+    if (mine >= FORT_MAX_PER_FACTION) return `要塞数量已达上限（${FORT_MAX_PER_FACTION}）`
+    return null
+  }
+
+  /** 建造者换指令、撤退或战败时清除其在建工事；重新下达同一目标时保留进度 */
+  private cancelBuilderForts(generalId: string, reason: string, keep?: Coord): void {
+    for (const fort of [...this.forts]) {
+      if (fort.status !== 'building' || fort.builderId !== generalId) continue
+      if (keep && coordKey(keep) === coordKey(fort.coord)) continue
+      this.cancelFort(fort, reason)
+    }
+  }
+
+  private cancelFort(fort: FortState, reason: string): void {
+    const index = this.forts.indexOf(fort)
+    if (index < 0) return
+    this.forts.splice(index, 1)
+
+    const text = `${this.nameOf(fort.faction)}在（${fort.coord.q},${fort.coord.r}）的在建要塞中断：${reason}`
+    this.log(fort.faction, text)
+    this.reports.push({ round: this.round, faction: fort.faction, text })
+  }
+
+  /** 要塞血量归零：永久移除，并清空该格归属 */
+  private destroyFort(fort: FortState, attacker: Faction): void {
+    const index = this.forts.indexOf(fort)
+    if (index < 0) return
+    this.forts.splice(index, 1)
+    if (this.occupation.get(coordKey(fort.coord)) === fort.faction) {
+      this.occupation.delete(coordKey(fort.coord))
+      this.occupationVersion += 1
+    }
+
+    const text = `${this.nameOf(attacker)}摧毁${this.nameOf(fort.faction)}的要塞（${fort.coord.q},${fort.coord.r}）`
+    this.log(fort.faction, text)
+    this.reports.push({ round: this.round, faction: attacker, text })
+    this.signal('lost', fort.faction, null, '要塞失守', `${this.nameOf(fort.faction)}的要塞被摧毁`)
+    this.signal('capture', attacker, null, '摧毁要塞', `${this.nameOf(attacker)}摧毁要塞`)
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Single general turn                                                 */
   /* ------------------------------------------------------------------ */
 
@@ -604,6 +892,14 @@ export class MarchSimulation {
       }
       if (TARGETED_STANCES.includes(general.order.stance)) {
         this.followOrder(general, general.order)
+        // 筑垒：站上目标格即开工，之后原地驻留直到建成
+        if (general.order?.stance === 'buildFortress') {
+          const target = general.order.target
+          if (target && coordKey(general.coord) === coordKey(target)) {
+            this.startFort(general)
+            return
+          }
+        }
       }
     }
 
@@ -631,6 +927,9 @@ export class MarchSimulation {
     const tile = getTile(this.terrain, next)
     if (!tile) return
 
+    // 敌方要塞占格：停在原地，由 resolveFortSieges 拆除后才可继续
+    if (this.blockedFor(general.faction)(next)) return
+
     general.path.shift()
     general.coord = { ...next }
     general.moveTicks = Math.max(1, Math.round(tile.moveCost))
@@ -649,13 +948,17 @@ export class MarchSimulation {
       locked.add(coordKey(other.target))
     }
 
+    // 主城格与要塞格都不作为自由行动的目标
+    const exclude = this.cityKeys()
+    for (const fort of this.forts) exclude.add(coordKey(fort.coord))
+
     const choice = chooseTarget(
       general,
       this.terrain,
       this.occupation,
       locked,
       this.random,
-      this.cityKeys(),
+      exclude,
     )
     if (!choice) return
 
@@ -752,6 +1055,11 @@ export class MarchSimulation {
       this.signal('blocked', general.faction, general.id, '目标失效', `${general.name}的指令目标不可通行`)
       return
     }
+    if (order.stance === 'buildFortress' && !tile.road && !tile.gate) {
+      general.order = null
+      this.signal('blocked', general.faction, general.id, '目标失效', `${general.name}的筑垒目标不是道路或关口`)
+      return
+    }
 
     const targetKey = coordKey(order.target)
     if (coordKey(general.coord) === targetKey) {
@@ -760,7 +1068,13 @@ export class MarchSimulation {
     }
 
     if (!general.target || coordKey(general.target) !== targetKey || general.path.length === 0) {
-      const result = findPath(this.terrain, general.coord, order.target)
+      const result = findPath(
+        this.terrain,
+        general.coord,
+        order.target,
+        4000,
+        this.blockedFor(general.faction),
+      )
       if (!result) {
         general.order = null
         this.signal('blocked', general.faction, general.id, '行军受阻', `${general.name}无法抵达指令目标`)
@@ -878,6 +1192,7 @@ export class MarchSimulation {
 
   /** 兵力归零：撤退到相邻空格并休整，兵力不回满 */
   private defeat(loser: GeneralState): void {
+    this.cancelBuilderForts(loser.id, '建造者被迫后撤')
     const retreat = this.retreatTile(loser)
     if (retreat) loser.coord = retreat
     loser.hp = Math.max(1, loser.hp)
@@ -897,6 +1212,7 @@ export class MarchSimulation {
 
   /** 主动撤退：向远离敌军的方向退一格，并获得 2 Tick 脱战保护 */
   private disengage(general: GeneralState): void {
+    this.cancelBuilderForts(general.id, '建造者主动撤退')
     const retreat = this.retreatTile(general)
     if (retreat) {
       general.coord = retreat
@@ -927,10 +1243,15 @@ export class MarchSimulation {
   private retreatTile(loser: GeneralState): Coord | null {
     let best: Coord | null = null
     let bestDistance = -Infinity
+    const hostile = this.hostileFactions(loser.faction)
 
     for (const neighbor of neighbors(loser.coord)) {
       const tile = getTile(this.terrain, neighbor)
       if (!tile?.passable) continue
+
+      // 敌方要塞占格不可进入
+      const fort = this.readyFortAt(neighbor)
+      if (fort && hostile.has(fort.faction)) continue
 
       let nearestEnemy = Infinity
       for (const other of this.generals) {

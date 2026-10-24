@@ -3,6 +3,7 @@ import {
   allianceNameOf,
   type BaseCity,
   type Faction,
+  type FortState,
   type GeneralState,
   type MinionState,
 } from '@shared/types'
@@ -10,6 +11,7 @@ import type { Diplomacy } from '../bot/diplomacy'
 import { AgentLayer, type WorldPosition } from './AgentLayer'
 import { CityLayer } from './CityLayer'
 import { MinionLayer } from './MinionLayer'
+import { FortLayer } from './FortLayer'
 import { hexCornerPoints, tileKey } from '@shared/map/hex'
 import type { MapData } from '@shared/map/MapGenerator'
 import { RiverLayer } from './RiverLayer'
@@ -81,6 +83,7 @@ export class MapRenderer {
   private agentLayer: AgentLayer | null = null
   private cityLayer: CityLayer | null = null
   private minionLayer: MinionLayer | null = null
+  private fortLayer: FortLayer | null = null
   /** 开局配置的同盟名称与关系，用于悬停文案 */
   private diplomacy: Diplomacy | null = null
 
@@ -152,7 +155,13 @@ export class MapRenderer {
     this.agentLayer = new AgentLayer(toWorld)
     this.cityLayer = new CityLayer(toWorld)
     this.minionLayer = new MinionLayer(toWorld)
-    this.scene.add(this.agentLayer.group, this.cityLayer.group, this.minionLayer.group)
+    this.fortLayer = new FortLayer(toWorld)
+    this.scene.add(
+      this.agentLayer.group,
+      this.cityLayer.group,
+      this.minionLayer.group,
+      this.fortLayer.group,
+    )
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown)
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove)
@@ -206,6 +215,12 @@ export class MapRenderer {
     this.minionLayer?.setMinions(minions, diplomacy, tickMs)
   }
 
+  /** Sync fortifications */
+  setForts(forts: FortState[], diplomacy?: Diplomacy): void {
+    if (diplomacy) this.diplomacy = diplomacy
+    this.fortLayer?.setForts(forts, diplomacy)
+  }
+
   /** Sync tile ownership */
   setOccupations(occupation: Map<string, Faction>, diplomacy: Diplomacy): void {
     this.diplomacy = diplomacy
@@ -218,6 +233,7 @@ export class MapRenderer {
     this.agentLayer?.setDiplomacy(diplomacy)
     this.cityLayer?.setDiplomacy(diplomacy)
     this.minionLayer?.setDiplomacy(diplomacy)
+    this.fortLayer?.setDiplomacy(diplomacy)
   }
 
   /** 悬停文案使用开局配置的同盟名称 */
@@ -250,6 +266,8 @@ export class MapRenderer {
     this.cityLayer = null
     this.minionLayer?.dispose()
     this.minionLayer = null
+    this.fortLayer?.dispose()
+    this.fortLayer = null
 
     this.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -381,6 +399,7 @@ export class MapRenderer {
     this.agentLayer?.update(dt)
     this.cityLayer?.update(dt)
     this.minionLayer?.update(dt)
+    this.fortLayer?.update(dt)
     this.renderer.render(this.scene, this.camera)
   }
 

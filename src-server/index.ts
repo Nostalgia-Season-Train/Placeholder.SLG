@@ -160,6 +160,8 @@ function readCardInput(body: Record<string, unknown>): CardCreateDTO {
     position: asPosition(body.position),
     attack: asGrade(body.attack),
     magic: asGrade(body.magic),
+    // 旧客户端不带工程字段时按中档处理
+    engineering: body.engineering === undefined ? '中' : asGrade(body.engineering),
     personality: asPersonality(body.personality),
   }
   if (typeof body.description === 'string') input.description = body.description.slice(0, 2000)

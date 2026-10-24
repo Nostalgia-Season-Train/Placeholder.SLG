@@ -21,6 +21,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '大臣',
     attack: '高',
     magic: '高',
+    engineering: '中',
     personality: ['稳健', '固守'],
     description: '北庭大臣，惯于坐镇后方权衡全局，行事务求稳妥。',
     dialoguePrompt: '言辞简练、深谋远虑，喜以问句引导他人自行领悟。',
@@ -34,6 +35,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '中',
     personality: ['勇猛', '突击'],
     description: '北庭先锋，冲锋在前，令出必行。',
     dialoguePrompt: '语气干脆，军令如山，常用短句。',
@@ -47,6 +49,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '低',
     personality: ['果敢', '突击'],
     description: '北庭急先锋，信奉先下手为强。',
     dialoguePrompt: '语速快、攻势凌厉，蔑视犹豫。',
@@ -60,6 +63,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '大臣',
     attack: '高',
     magic: '高',
+    engineering: '高',
     personality: ['谨慎', '固守'],
     description: '东川大臣，精于布局，落子前必先推演三步。',
     dialoguePrompt: '措辞温和缜密，习惯先复述局势再给出判断。',
@@ -73,6 +77,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '中',
     personality: ['谨慎', '拓土'],
     description: '东川宿将，行军扎营皆按章法，少有失手。',
     dialoguePrompt: '冷静克制，汇报条理分明。',
@@ -86,6 +91,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '高',
     personality: ['稳健', '拓土'],
     description: '东川边将，常年戍守，处变不惊。',
     dialoguePrompt: '话少而稳，偶有感慨，多与江声有关。',
@@ -99,6 +105,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '大臣',
     attack: '高',
     magic: '高',
+    engineering: '高',
     personality: ['谨慎', '拓土'],
     description: '西陵大臣，善以疑兵与缓势消耗对手。',
     dialoguePrompt: '口气疏淡，善用比喻，常在话中留三分余地。',
@@ -112,6 +119,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '低',
     personality: ['勇猛', '突击'],
     description: '西陵猛将，遇敌必战，战则求速决。',
     dialoguePrompt: '粗声大嗓，好斗嗜战，常催促开战。',
@@ -125,6 +133,7 @@ const BUILTIN_CARDS: CardCreateDTO[] = [
     position: '无',
     attack: '高',
     magic: '低',
+    engineering: '高',
     personality: ['稳健', '拓土'],
     description: '西陵老卒，护主心切，临阵不退。',
     dialoguePrompt: '朴实厚重，以职责为先，不尚空谈。',
@@ -147,6 +156,7 @@ function openDatabase(): DatabaseSync {
       position        TEXT NOT NULL,
       attack          TEXT NOT NULL,
       magic           TEXT NOT NULL,
+      engineering     TEXT NOT NULL DEFAULT '中',
       description     TEXT NOT NULL DEFAULT '',
       personality     TEXT NOT NULL DEFAULT '',
       dialogue_prompt TEXT NOT NULL DEFAULT '',
@@ -164,21 +174,27 @@ function openDatabase(): DatabaseSync {
   if (!columns.some((column) => column.name === 'active')) {
     database.exec('ALTER TABLE cards ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
   }
+  // 旧库没有工程字段，按中档补齐；内置卡改为使用种子档位，避免全部落在默认值
+  if (!columns.some((column) => column.name === 'engineering')) {
+    database.exec("ALTER TABLE cards ADD COLUMN engineering TEXT NOT NULL DEFAULT '中'")
+    const backfill = database.prepare('UPDATE cards SET engineering = ? WHERE name = ? AND builtin = 1')
+    for (const card of BUILTIN_CARDS) backfill.run(card.engineering, card.name)
+  }
   return database
 }
 
 const db = openDatabase()
 
 const CARD_COLUMNS =
-  'id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, active, created_at AS createdAt'
+  'id, name, faction, team, role, position, attack, magic, engineering, description, personality, dialogue_prompt AS dialoguePrompt, author_note AS authorNote, builtin, active, created_at AS createdAt'
 
 const listStatement = db.prepare(
   `SELECT ${CARD_COLUMNS} FROM cards ORDER BY created_at, id`,
 )
 const readStatement = db.prepare(`SELECT ${CARD_COLUMNS} FROM cards WHERE id = ?`)
 const insertStatement = db.prepare(`
-  INSERT INTO cards (id, name, faction, team, role, position, attack, magic, description, personality, dialogue_prompt, author_note, builtin, active, created_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO cards (id, name, faction, team, role, position, attack, magic, engineering, description, personality, dialogue_prompt, author_note, builtin, active, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     faction = excluded.faction,
@@ -187,6 +203,7 @@ const insertStatement = db.prepare(`
     position = excluded.position,
     attack = excluded.attack,
     magic = excluded.magic,
+    engineering = excluded.engineering,
     description = excluded.description,
     personality = excluded.personality,
     dialogue_prompt = excluded.dialogue_prompt,
@@ -198,7 +215,7 @@ const insertStatement = db.prepare(`
 const updateStatement = db.prepare(`
   UPDATE cards SET
     name = ?, faction = ?, team = ?, role = ?, position = ?,
-    attack = ?, magic = ?, description = ?, personality = ?,
+    attack = ?, magic = ?, engineering = ?, description = ?, personality = ?,
     dialogue_prompt = ?, author_note = ?, active = ?
   WHERE id = ?
 `)
@@ -212,6 +229,7 @@ interface CardRow {
   position: CharacterCardDTO['position']
   attack: CharacterCardDTO['attack']
   magic: CharacterCardDTO['magic']
+  engineering: CharacterCardDTO['engineering']
   description: string
   personality: string
   dialoguePrompt: string
@@ -233,6 +251,7 @@ function toDto(row: CardRow): CharacterCardDTO {
     position: row.position,
     attack: row.attack,
     magic: row.magic,
+    engineering: row.engineering,
     description: row.description,
     personality: normalizePersonality(row.personality),
     dialoguePrompt: row.dialoguePrompt,
@@ -252,6 +271,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     position: input.position,
     attack: input.attack,
     magic: input.magic,
+    engineering: input.engineering,
     description: input.description ?? '',
     personality: normalizePersonality(input.personality),
     dialoguePrompt: input.dialoguePrompt ?? '',
@@ -268,6 +288,7 @@ function writeCard(id: string, input: CardCreateDTO, builtin: boolean): Characte
     dto.position,
     dto.attack,
     dto.magic,
+    dto.engineering,
     dto.description,
     dto.personality.join('、'),
     dto.dialoguePrompt,
@@ -314,6 +335,7 @@ export function updateCard(id: string, input: CardCreateDTO): CharacterCardDTO |
     input.position,
     input.attack,
     input.magic,
+    input.engineering,
     input.description ?? '',
     normalizePersonality(input.personality).join('、'),
     input.dialoguePrompt ?? '',
@@ -330,6 +352,7 @@ export function updateCard(id: string, input: CardCreateDTO): CharacterCardDTO |
     position: input.position,
     attack: input.attack,
     magic: input.magic,
+    engineering: input.engineering,
     description: input.description ?? '',
     personality: normalizePersonality(input.personality).join('、'),
     dialoguePrompt: input.dialoguePrompt ?? '',

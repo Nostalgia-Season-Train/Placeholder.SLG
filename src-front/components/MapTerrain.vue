@@ -191,6 +191,7 @@ function renderScene(): void {
   view.setAgents(snap.generals, policy, speed.value)
   view.setCities(snap.cities, policy)
   view.setMinions(snap.minions, policy, speed.value)
+  view.setForts(snap.forts, policy)
 
   if (snap.occupationVersion !== lastOccupationVersion) {
     lastOccupationVersion = snap.occupationVersion
@@ -426,6 +427,7 @@ function cardMeta(card: CharacterCardDTO): string {
     `职位 ${card.position === '无' ? '无（上前线）' : card.position}`,
     `攻击 ${card.attack}`,
     `魔力 ${card.magic}`,
+    `工程 ${card.engineering}`,
   ]
   if (card.personality.length > 0) parts.push(card.personality.join('、'))
   return parts.join(' · ')

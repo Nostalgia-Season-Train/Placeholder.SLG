@@ -20,16 +20,21 @@ export interface PathResult {
 /** Smallest movement cost among passable tiles, keeps the heuristic admissible */
 const MIN_COST = 0.6
 
+/**
+ * @param blocked 额外禁行判定（例如敌方要塞占格）；不传时行为不变，起点不受限制
+ */
 export function findPath(
   terrain: WorldTerrain,
   start: Coord,
   goal: Coord,
   maxExpansions = 4000,
+  blocked?: (coord: Coord) => boolean,
 ): PathResult | null {
   const startKey = coordKey(start)
   const goalKey = coordKey(goal)
   if (startKey === goalKey) return { path: [], cost: 0 }
   if (!getTile(terrain, goal)?.passable) return null
+  if (blocked?.(goal)) return null
 
   const open = new Map<string, Node>()
   const closed = new Set<string>()
@@ -73,6 +78,7 @@ export function findPath(
 
       const tile = getTile(terrain, neighbor)
       if (!tile?.passable) continue
+      if (blocked?.(neighbor)) continue
 
       const cost = current.cost + tile.moveCost
       const existing = open.get(key)
@@ -103,6 +109,7 @@ export function findRoadPath(
   terrain: WorldTerrain,
   start: Coord,
   goals: Coord[],
+  blocked?: (coord: Coord) => boolean,
 ): PathResult | null {
   const goalKeys = new Set(goals.map((goal) => coordKey(goal)))
   if (goalKeys.size === 0) return null
@@ -151,6 +158,7 @@ export function findRoadPath(
 
       const tile = getTile(terrain, neighbor)
       if (!tile?.passable || (!tile.road && !tile.gate)) continue
+      if (blocked?.(neighbor)) continue
 
       const cost = current.cost + (tile.gate ? GATE_STEP : ROAD_STEP)
       const existing = open.get(key)

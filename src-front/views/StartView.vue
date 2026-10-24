@@ -167,6 +167,7 @@ function cardPayload(card: CharacterCardDTO, patch: Partial<CardCreateDTO> = {})
     position: card.position,
     attack: card.attack,
     magic: card.magic,
+    engineering: card.engineering,
     personality: card.personality,
     description: card.description,
     dialoguePrompt: card.dialoguePrompt,

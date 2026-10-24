@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 角色表单：新增与编辑共用，字段与角色属性文档一致。
  * 只负责收集并提交表单，落库与生效时机由调用方决定。
@@ -45,6 +45,7 @@ function blankDraft(): CardCreateDTO {
     position: '无',
     attack: '中',
     magic: '低',
+    engineering: '中',
     personality: [...DEFAULT_PERSONALITY],
     description: '',
     dialoguePrompt: '',
@@ -68,6 +69,7 @@ watch(
           position: card.position,
           attack: card.attack,
           magic: card.magic,
+          engineering: card.engineering,
           personality: card.personality,
           description: card.description,
           dialoguePrompt: card.dialoguePrompt,
@@ -196,6 +198,12 @@ function submit(): void {
           <label class="field">
             <span>魔力</span>
             <select v-model="draft.magic">
+              <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>工程</span>
+            <select v-model="draft.engineering">
               <option v-for="grade in STAT_GRADES" :key="grade" :value="grade">{{ grade }}</option>
             </select>
           </label>

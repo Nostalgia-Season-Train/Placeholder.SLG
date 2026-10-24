@@ -88,7 +88,7 @@ export interface Personality {
 }
 
 /** Stance a commander agent can assign to a bot */
-export type BotStance = 'auto' | 'attack' | 'defend' | 'hold' | 'retreat'
+export type BotStance = 'auto' | 'attack' | 'defend' | 'hold' | 'retreat' | 'buildFortress'
 
 export const ORDER_LABELS: Record<BotStance, string> = {
   auto: '自主行动',
@@ -96,6 +96,7 @@ export const ORDER_LABELS: Record<BotStance, string> = {
   defend: '防守',
   hold: '待命',
   retreat: '撤退',
+  buildFortress: '筑垒',
 }
 
 /** Order issued by an agent; `auto` means the bot falls back to its own decision logic */
@@ -116,6 +117,8 @@ export interface GeneralState {
   team: GeneralTeam | null
   /** 角色属性中的定位；影响兵力与普攻强度 */
   role: GeneralRole
+  /** 工程档位：决定建造要塞的耗时与对工事（要塞、主城城防）的伤害 */
+  engineering: StatGrade
   coord: Coord
   power: number
   /** 当前兵力与兵力上限；兵力归零即战败撤退 */
@@ -180,10 +183,31 @@ export interface MinionState {
   engagedSince: number
 }
 
+/** 要塞：由角色在道路上驻留建成，占格阻断敌方推进 */
+export type FortStatus = 'building' | 'ready'
+
+export interface FortState {
+  id: string
+  faction: Faction
+  coord: Coord
+  hp: number
+  maxHp: number
+  /** 建造中只做展示，不阻断通行、不可被攻击 */
+  status: FortStatus
+  /** 建造进度，建成后等于 buildCost */
+  progress: number
+  /** 建成所需进度，由建造者工程档位换算 */
+  buildCost: number
+  builderId: string
+  /** 建成的回合，用于战报与排序 */
+  builtRound: number
+}
+
 export interface SimSnapshot {
   round: number
   generals: GeneralState[]
   minions: MinionState[]
+  forts: FortState[]
   cities: BaseCity[]
   occupation: Map<string, Faction>
   occupationVersion: number
@@ -392,6 +416,8 @@ export interface CardSpawn {
   position: GeneralPosition
   attack: StatGrade
   magic: StatGrade
+  /** 工程档位：决定建造要塞耗时与对工事伤害 */
+  engineering: StatGrade
   personality: PersonalityTag[]
 }
 
@@ -405,6 +431,8 @@ export interface SimSaveState {
   generals: GeneralState[]
   /** 旧存档没有兵线，读取时按空数组处理 */
   minions?: MinionState[]
+  /** 旧存档没有要塞，读取时按空数组处理 */
+  forts?: FortState[]
   occupation: [string, Faction][]
   events: SimEvent[]
 }

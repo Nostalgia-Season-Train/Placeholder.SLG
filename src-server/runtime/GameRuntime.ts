@@ -655,6 +655,7 @@ export class GameRuntime {
         round: snapshot.round,
         generals: snapshot.generals,
         minions: snapshot.minions,
+        forts: snapshot.forts,
         cities: snapshot.cities,
         occupationVersion: snapshot.occupationVersion,
         events: snapshot.events,

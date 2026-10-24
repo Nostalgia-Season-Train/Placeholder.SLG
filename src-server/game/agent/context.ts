@@ -9,6 +9,7 @@ import {
   type AllianceNames,
   type Coord,
   type Faction,
+  type FortState,
   type GeneralState,
   type SimSnapshot,
 } from '../../../src-shared/types'
@@ -41,6 +42,7 @@ const ORDER_LIMIT = 8
 const SPEECH_LIMIT = 6
 const CANDIDATE_LIMIT = 16
 const ENEMY_LIMIT = 6
+const FORT_LIMIT = 6
 /** 周边敌方单位的可见半径 */
 const SIGHT_RADIUS = 12
 
@@ -71,6 +73,7 @@ export function buildActorContext(
       职位: card.position,
       团: card.team ?? '',
       定位: card.role,
+      工程: card.engineering ?? '中',
       性格: personalitySummary(card.personality).label,
       性格倾向: personalitySummary(card.personality).behavior,
       描述: card.description,
@@ -93,6 +96,8 @@ export function buildActorContext(
       己方地块数: snapshot.factionCounts[card.faction],
       己方单位: ownGenerals(card.faction, snapshot).map(unitLine),
       周边敌方单位: nearbyEnemies(card.faction, snapshot, deps.allianceNames),
+      己方要塞: fortView(card.faction, snapshot, deps.allianceNames, true),
+      敌方要塞: fortView(card.faction, snapshot, deps.allianceNames, false),
       可占领候选: candidates(card.faction, snapshot, deps.terrain, deps.allianceNames),
     },
     本轮触发: {
@@ -121,7 +126,31 @@ function speechLine(speech: { round: number; channel: ChatChannel; text: string 
 }
 
 function unitLine(general: GeneralState): string {
-  return `${general.id} ${general.name} (${general.coord.q},${general.coord.r}) ${general.status} 战力${general.power} 兵力${general.hp}/${general.maxHp}`
+  return `${general.id} ${general.name} (${general.coord.q},${general.coord.r}) ${general.status} 战力${general.power} 兵力${general.hp}/${general.maxHp} 工程${general.engineering}`
+}
+
+/** 要塞摘要：己方全部展示，敌方只展示周边可见范围 */
+function fortView(
+  faction: Faction,
+  snapshot: SimSnapshot,
+  names: AllianceNames,
+  own: boolean,
+): string[] {
+  const centroid = factionCentroid(faction, snapshot)
+  return snapshot.forts
+    .filter((fort) => (fort.faction === faction) === own)
+    .filter((fort) => own || hexDistance(centroid, fort.coord) <= SIGHT_RADIUS)
+    .sort((a, b) => a.builtRound - b.builtRound || a.id.localeCompare(b.id))
+    .slice(0, FORT_LIMIT)
+    .map((fort) => fortLine(fort, names))
+}
+
+function fortLine(fort: FortState, names: AllianceNames): string {
+  const state =
+    fort.status === 'building'
+      ? `建造中${fort.progress}/${fort.buildCost}`
+      : `已建成 ${fort.hp}/${fort.maxHp}`
+  return `(${fort.coord.q},${fort.coord.r}) ${allianceNameOf(names, fort.faction)} ${state}`
 }
 
 /** 频道最近消息，剔除本轮触发的那句，避免与触发内容重复 */
@@ -200,8 +229,10 @@ function candidates(
   names: AllianceNames,
 ): unknown[] {
   const centroid = factionCentroid(faction, snapshot)
+  const fortKeys = new Set(snapshot.forts.map((fort) => coordKey(fort.coord)))
   return terrain.capturable
     .filter((tile) => snapshot.occupation.get(coordKey(tile.coord)) !== faction)
+    .filter((tile) => !fortKeys.has(coordKey(tile.coord)))
     .map((tile) => {
       const owner = snapshot.occupation.get(coordKey(tile.coord)) ?? null
       const distance = hexDistance(centroid, tile.coord)
