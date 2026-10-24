@@ -9,7 +9,7 @@ import CharacterForm from '../components/CharacterForm.vue'
 import LlmSettings from '../components/LlmSettings.vue'
 import { WorldApi } from '@/game/api/client'
 import { decodeSnapshot } from '@shared/codec'
-import { createDiplomacy, relationStyleOf } from '@/game/bot/diplomacy'
+import { createDiplomacy, RELATION_STYLES, relationStyleOf } from '@/game/bot/diplomacy'
 import {
   ALLIANCE_RELATIONS,
   ALLIANCE_RELATION_LABELS,
@@ -64,6 +64,36 @@ const selfFaction = computed(
 /** 已加入本局的角色与角色库中的闲置角色 */
 const rosterCards = computed(() => cards.value.filter((card) => card.active))
 const idleCards = computed(() => cards.value.filter((card) => !card.active))
+
+interface RosterGroup {
+  key: string
+  label: string
+  names: string
+  color: string
+  cards: CharacterCardDTO[]
+}
+
+/** 出战角色按关系分组：我方 / 友方 / 敌方；所属同盟已停用的角色单独成组 */
+const rosterGroups = computed<RosterGroup[]>(() => {
+  const groups: RosterGroup[] = ALLIANCE_RELATIONS.map((relation) => {
+    const members = alliances.value.filter((item) => item.relation === relation)
+    return {
+      key: relation,
+      label: ALLIANCE_RELATION_LABELS[relation],
+      names: members.map((item) => item.name).join('、'),
+      color: `#${RELATION_STYLES[relation].fill.toString(16).padStart(6, '0')}`,
+      cards: rosterCards.value.filter((card) =>
+        members.some((item) => item.faction === card.faction),
+      ),
+    }
+  })
+  const enabled = new Set(alliances.value.map((item) => item.faction))
+  const orphans = rosterCards.value.filter((card) => !enabled.has(card.faction))
+  if (orphans.length > 0) {
+    groups.push({ key: 'unassigned', label: '未启用同盟', names: '', color: '#8c9a9d', cards: orphans })
+  }
+  return groups.filter((group) => group.cards.length > 0)
+})
 
 function allianceNameOf(faction: Faction): string {
   const alliance = alliances.value.find((item) => item.faction === faction)
@@ -369,45 +399,54 @@ onMounted(async () => {
               <span class="meta">共 {{ rosterCards.length }} 名 · 指定所属同盟与团</span>
             </header>
 
-            <ul class="card-list">
-              <li v-for="card in rosterCards" :key="card.id">
-                <div class="card-info">
-                  <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
-                  <span class="meta">{{ rosterMeta(card) }}</span>
-                </div>
-                <select
-                  v-if="card.faction === selfFaction"
-                  :value="card.team ?? ''"
-                  @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="">无团</option>
-                  <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
-                </select>
-                <span v-else class="meta team-none">不分团</span>
-                <select
-                  :value="card.faction"
-                  @change="onCardFactionChange(card, ($event.target as HTMLSelectElement).value as Faction)"
-                >
-                  <option
-                    v-for="alliance in alliances"
-                    :key="alliance.faction"
-                    :value="alliance.faction"
+            <div v-for="group in rosterGroups" :key="group.key" class="roster-group">
+              <div class="roster-group-head">
+                <span class="swatch" :style="{ background: group.color }"></span>
+                <strong>{{ group.label }}</strong>
+                <span class="meta">
+                  {{ group.names || '未启用' }} · {{ group.cards.length }} 名
+                </span>
+              </div>
+              <ul class="card-list">
+                <li v-for="card in group.cards" :key="card.id">
+                  <div class="card-info">
+                    <strong>{{ card.name }}{{ card.builtin ? ' · 内置' : '' }}</strong>
+                    <span class="meta">{{ rosterMeta(card) }}</span>
+                  </div>
+                  <select
+                    v-if="card.faction === selfFaction"
+                    :value="card.team ?? ''"
+                    @change="onCardTeamChange(card, ($event.target as HTMLSelectElement).value)"
                   >
-                    {{ alliance.name }}
-                  </option>
-                  <option
-                    v-if="!alliances.some((item) => item.faction === card.faction)"
+                    <option value="">无团</option>
+                    <option v-for="team in GENERAL_TEAMS" :key="team" :value="team">{{ team }}</option>
+                  </select>
+                  <span v-else class="meta team-none">不分团</span>
+                  <select
                     :value="card.faction"
+                    @change="onCardFactionChange(card, ($event.target as HTMLSelectElement).value as Faction)"
                   >
-                    {{ allianceNameOf(card.faction) }}
-                  </option>
-                </select>
-                <button type="button" class="ghost" @click="openEditCard(card, 'assign')">
-                  编辑
-                </button>
-                <button type="button" class="ghost" @click="setCardActive(card, false)">移除</button>
-              </li>
-            </ul>
+                    <option
+                      v-for="alliance in alliances"
+                      :key="alliance.faction"
+                      :value="alliance.faction"
+                    >
+                      {{ alliance.name }}
+                    </option>
+                    <option
+                      v-if="!alliances.some((item) => item.faction === card.faction)"
+                      :value="card.faction"
+                    >
+                      {{ allianceNameOf(card.faction) }}
+                    </option>
+                  </select>
+                  <button type="button" class="ghost" @click="openEditCard(card, 'assign')">
+                    编辑
+                  </button>
+                  <button type="button" class="ghost" @click="setCardActive(card, false)">移除</button>
+                </li>
+              </ul>
+            </div>
             <p v-if="!rosterCards.length" class="meta">暂无出战角色，从下方角色库添加。</p>
 
             <div class="section-actions">
@@ -689,6 +728,23 @@ onMounted(async () => {
   width: 108px;
   padding: 5px 7px;
   text-align: center;
+}
+
+.roster-group + .roster-group {
+  margin-top: 14px;
+}
+
+.roster-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.roster-group-head strong {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e9dcc0;
 }
 
 .world-stats {
