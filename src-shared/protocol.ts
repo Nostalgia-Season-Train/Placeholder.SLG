@@ -20,11 +20,23 @@ export interface ChatLog {
   team: ChatMessage[]
 }
 
+/** live = 调用真实接口；mock = 强制使用本地模拟决策，不联网 */
+export type LlmMode = 'live' | 'mock'
+
 export interface LlmStatusDTO {
   baseUrl: string
   model: string
   hasApiKey: boolean
   configured: boolean
+  mode: LlmMode
+  /** 最近一次真实接口调用失败的原因，成功调用后清空 */
+  lastError: string | null
+}
+
+/** 连接测试结果：error 为 null 表示连通 */
+export interface LlmTestResult {
+  ok: boolean
+  error: string | null
 }
 
 export interface GameStateDTO {
@@ -37,6 +49,7 @@ export interface GameStateDTO {
   faction: Faction
   seed: number
   llmConfigured: boolean
+  llmError: string | null
 }
 
 export interface WorldDTO {
@@ -60,6 +73,7 @@ export interface LlmPatch {
   baseUrl?: string
   model?: string
   apiKey?: string
+  mode?: LlmMode
 }
 
 export interface CommandResult {
@@ -103,7 +117,8 @@ export interface WorldSaveDTO {
   savedAt: string
   label: string
   round: number
-  state: Omit<GameStateDTO, 'llmConfigured'>
+  /** LLM 连接状态属于运行时状态，不写入存档 */
+  state: Omit<GameStateDTO, 'llmConfigured' | 'llmError'>
   sim: SimSaveState
   chat: ChatLog
   /** 旧存档没有该段，读档后所有角色重新随机排期 */

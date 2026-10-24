@@ -161,7 +161,13 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     if (typeof body.baseUrl === 'string') patch.baseUrl = body.baseUrl
     if (typeof body.model === 'string') patch.model = body.model
     if (typeof body.apiKey === 'string') patch.apiKey = body.apiKey
+    if (body.mode === 'live' || body.mode === 'mock') patch.mode = body.mode
     json(response, 200, runtime.updateLlm(patch))
+    return
+  }
+
+  if (method === 'POST' && path === '/api/llm/test') {
+    json(response, 200, await runtime.testLlm())
     return
   }
 

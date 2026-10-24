@@ -25,13 +25,14 @@ import type {
   GameStateDTO,
   LlmPatch,
   LlmStatusDTO,
+  LlmTestResult,
   MapDTO,
   SaveListDTO,
   SnapshotDTO,
   WorldDTO,
   WorldSaveDTO,
 } from '../../src-shared/protocol'
-import { createLlmClient, llmStatus, updateLlm } from './llmSettings'
+import { createLlmClient, llmError, llmStatus, testLlmConnection, updateLlm } from './llmSettings'
 import { insertCard, listCards } from './cardStore'
 import {
   deleteSave,
@@ -123,6 +124,7 @@ export class GameRuntime {
       faction: this.config.faction,
       seed: this.map.seed,
       llmConfigured: llmStatus().configured,
+      llmError: llmError(),
     }
   }
 
@@ -180,6 +182,13 @@ export class GameRuntime {
     this.llm = createLlmClient()
     this.hub.broadcast({ type: 'state', state: this.state() })
     return status
+  }
+
+  /** 主动探活：真实接口不可达时把原因带回界面 */
+  async testLlm(): Promise<LlmTestResult> {
+    const result = await testLlmConnection()
+    this.hub.broadcast({ type: 'state', state: this.state() })
+    return result
   }
 
   /* ------------------------------------------------------------------ */

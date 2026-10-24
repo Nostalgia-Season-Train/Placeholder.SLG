@@ -13,6 +13,7 @@ import type {
   GameStateDTO,
   LlmPatch,
   LlmStatusDTO,
+  LlmTestResult,
   MapDTO,
   SaveListDTO,
   ServerEvent,
@@ -76,6 +77,10 @@ export class WorldApi {
 
   setLlm(patch: LlmPatch): Promise<LlmStatusDTO> {
     return request<LlmStatusDTO>('/api/llm', { method: 'PUT', body: JSON.stringify(patch) })
+  }
+
+  testLlm(): Promise<LlmTestResult> {
+    return request<LlmTestResult>('/api/llm/test', { method: 'POST', body: '{}' })
   }
 
   listSaves(): Promise<SaveListDTO> {
