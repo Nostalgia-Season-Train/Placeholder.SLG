@@ -16,7 +16,9 @@ import {
   type WorldTerrain,
 } from './terrain'
 import {
+  FACTIONS,
   ORDER_LABELS,
+  RESOURCE_KINDS,
   personalityOf,
   type AllianceConfig,
   type BaseCity,
@@ -24,6 +26,7 @@ import {
   type BotStance,
   type CardSpawn,
   type Faction,
+  type FactionResources,
   type Coord,
   type FortState,
   type GeneralState,
@@ -76,6 +79,26 @@ const FORT_BUILD_COST: Record<StatGrade, number> = { 低: 18, 中: 12, 高: 8 }
 const FORT_DAMAGE: Record<StatGrade, number> = { 低: 4, 中: 7, 高: 11 }
 /** 小兵对要塞的每 Tick 伤害 */
 const MINION_FORT_DAMAGE = 6
+
+/**
+ * 资源：每 20 Tick 与出兵同节拍结算一次。主城按当前归属定额产出，
+ * 占领地块按数量加成；四个资源池各自独立，互不兑换。
+ */
+const RESOURCE_INTERVAL = WAVE_INTERVAL
+const CITY_YIELD: FactionResources = { food: 30, wood: 20, stone: 15, gold: 10 }
+/** 每格己方地块每期产出；黄金按占用格数每 5 格折算 1 点 */
+const TILE_YIELD: FactionResources = { food: 2, wood: 1, stone: 1, gold: 0 }
+const TILE_GOLD_EVERY = 5
+/** 单项资源上限，避免长局堆积出天文数字 */
+const RESOURCE_CAP = 9999
+/** 开局资源：够开第一座要塞，之后靠产出滚动 */
+const INITIAL_RESOURCES: FactionResources = { food: 240, wood: 180, stone: 140, gold: 80 }
+/** 筑垒消耗，开工时一次性扣除，中断不返还 */
+export const FORT_STONE_COST = 80
+export const FORT_WOOD_COST = 60
+/** 休整补兵：每恢复 1 点兵力消耗粮食 0.5、黄金 0.1 */
+const RECRUIT_FOOD_PER_HP = 0.5
+const RECRUIT_GOLD_PER_HP = 0.1
 
 /** 兵线战报：小兵全灭或主城易手时写入，由运行时转发到世界频道 */
 export interface SimReport {
@@ -156,6 +179,11 @@ export class MarchSimulation {
   private readonly generals: GeneralState[]
   private readonly minions: MinionState[] = []
   private readonly forts: FortState[] = []
+  private readonly resources: Record<Faction, FactionResources> = {
+    red: { ...INITIAL_RESOURCES },
+    cyan: { ...INITIAL_RESOURCES },
+    gold: { ...INITIAL_RESOURCES },
+  }
   private readonly occupation = new Map<string, Faction>()
   private readonly events: SimEvent[] = []
   private readonly signals: SimSignal[] = []
@@ -182,6 +210,11 @@ export class MarchSimulation {
       this.generals = restore.generals.map(cloneGeneral)
       for (const minion of restore.minions ?? []) this.minions.push(cloneMinion(minion))
       for (const fort of restore.forts ?? []) this.forts.push(cloneFort(fort))
+      // 旧存档没有资源，按开局资源恢复
+      for (const faction of FACTIONS) {
+        const saved = restore.resources?.[faction]
+        if (saved) this.resources[faction] = { ...INITIAL_RESOURCES, ...saved }
+      }
       for (const [key, faction] of restore.occupation) this.occupation.set(key, faction)
       this.round = restore.round
       this.occupationVersion = restore.occupationVersion
@@ -206,6 +239,7 @@ export class MarchSimulation {
       generals: this.generals.map(cloneGeneral),
       minions: this.minions.map(cloneMinion),
       forts: this.forts.map(cloneFort),
+      resources: this.cloneResources(),
       occupation: [...this.occupation.entries()],
       events: this.events.map((event) => ({ ...event })),
     }
@@ -224,6 +258,7 @@ export class MarchSimulation {
     }
 
     this.spawnWave()
+    this.produceResources()
 
     const units = this.combatUnits()
     const locked = new Set<string>()
@@ -315,6 +350,8 @@ export class MarchSimulation {
       cities: this.cities.map((city) => ({ ...city, coord: { ...city.coord } })),
       minions: this.minions.map(cloneMinion),
       forts: this.forts.map(cloneFort),
+      resources: this.cloneResources(),
+      resourceIncome: this.incomeTable(),
       occupation: new Map(this.occupation),
       occupationVersion: this.occupationVersion,
       events: this.events.slice(-this.eventLimit).reverse(),
@@ -550,6 +587,91 @@ export class MarchSimulation {
         faction,
         `${this.nameOf(faction)}自${city.name}派出${WAVE_SIZE}个小兵，目标${route.city.name}`,
       )
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Resources                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * 资源结算：每 20 Tick 结算一次，每座己方主城定额产出，
+   * 每格己方占领地块再有加成；纯加法，不消费随机数。
+   */
+  private produceResources(): void {
+    if (this.round % RESOURCE_INTERVAL !== 0) return
+
+    const owned = this.ownedCounts()
+    for (const faction of FACTIONS) {
+      const pool = this.resources[faction]
+      const income = this.incomeOf(faction, owned)
+      for (const kind of RESOURCE_KINDS) {
+        pool[kind] = Math.min(RESOURCE_CAP, pool[kind] + income[kind])
+      }
+    }
+  }
+
+  /** 各同盟当前占用的地块数，含主城格 */
+  private ownedCounts(): Record<Faction, number> {
+    const owned: Record<Faction, number> = { red: 0, cyan: 0, gold: 0 }
+    for (const faction of this.occupation.values()) owned[faction] += 1
+    return owned
+  }
+
+  /** 每期产出 = 主城定额 + 占领地块加成 */
+  private incomeOf(faction: Faction, owned: Record<Faction, number>): FactionResources {
+    const cities = this.cities.filter((city) => city.owner === faction).length
+    const tiles = owned[faction]
+    return {
+      food: cities * CITY_YIELD.food + tiles * TILE_YIELD.food,
+      wood: cities * CITY_YIELD.wood + tiles * TILE_YIELD.wood,
+      stone: cities * CITY_YIELD.stone + tiles * TILE_YIELD.stone,
+      gold: cities * CITY_YIELD.gold + Math.floor(tiles / TILE_GOLD_EVERY),
+    }
+  }
+
+  private incomeTable(): Record<Faction, FactionResources> {
+    const owned = this.ownedCounts()
+    return {
+      red: this.incomeOf('red', owned),
+      cyan: this.incomeOf('cyan', owned),
+      gold: this.incomeOf('gold', owned),
+    }
+  }
+
+  /** 扣资源：任一项不足即整笔拒绝，避免出现扣一半的中间态 */
+  private spend(faction: Faction, cost: Partial<FactionResources>): boolean {
+    const pool = this.resources[faction]
+    for (const kind of RESOURCE_KINDS) {
+      if ((cost[kind] ?? 0) > pool[kind]) return false
+    }
+    for (const kind of RESOURCE_KINDS) pool[kind] -= cost[kind] ?? 0
+    return true
+  }
+
+  /** 休整补兵：按粮食与黄金计费，资源不够时只补付得起的部分 */
+  private replenish(general: GeneralState): void {
+    const want = Math.min(general.maxHp - general.hp, Math.ceil(general.maxHp * 0.15))
+    if (want <= 0) return
+
+    const pool = this.resources[general.faction]
+    const affordable = Math.min(
+      want,
+      Math.floor(pool.food / RECRUIT_FOOD_PER_HP),
+      Math.floor(pool.gold / RECRUIT_GOLD_PER_HP),
+    )
+    if (affordable <= 0) return
+
+    pool.food -= Math.ceil(affordable * RECRUIT_FOOD_PER_HP)
+    pool.gold -= Math.ceil(affordable * RECRUIT_GOLD_PER_HP)
+    general.hp = Math.min(general.maxHp, general.hp + affordable)
+  }
+
+  private cloneResources(): Record<Faction, FactionResources> {
+    return {
+      red: { ...this.resources.red },
+      cyan: { ...this.resources.cyan },
+      gold: { ...this.resources.gold },
     }
   }
 
@@ -791,6 +913,16 @@ export class MarchSimulation {
       return
     }
 
+    // 开工即扣料，中断不返还
+    if (!this.spend(general.faction, { stone: FORT_STONE_COST, wood: FORT_WOOD_COST })) {
+      general.order = null
+      general.target = null
+      general.path = []
+      general.status = 'idle'
+      this.signal('blocked', general.faction, general.id, '资源不足', `${general.name}石料或木材不足，无法筑垒`)
+      return
+    }
+
     this.forts.push({
       id: `fort-${this.round}-${general.id}`,
       faction: general.faction,
@@ -877,8 +1009,8 @@ export class MarchSimulation {
     if (general.restTurns > 0) {
       general.restTurns -= 1
       general.status = 'resting'
-      // 休整只恢复部分兵力，撤退后不会直接回满
-      general.hp = Math.min(general.maxHp, general.hp + Math.ceil(general.maxHp * 0.15))
+      // 休整只恢复部分兵力，撤退后不会直接回满；补兵按粮食与黄金计费
+      this.replenish(general)
       return
     }
 

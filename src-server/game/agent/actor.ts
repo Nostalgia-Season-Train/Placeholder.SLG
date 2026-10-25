@@ -7,6 +7,7 @@
  */
 import { axialToWorld } from '../../../src-shared/map/hex'
 import { coordKey, getTile, hexDistance, neighbors, type TileInfo, type WorldTerrain } from '../bot/terrain'
+import { FORT_STONE_COST, FORT_WOOD_COST } from '../bot/simulation'
 import {
   allianceNameOf,
   FACTIONS,
@@ -101,7 +102,7 @@ const SYSTEM_PROMPT = `你是大地图上的一个角色，由 LLM 扮演，Bot 
 2. 职位决定指挥范围：大臣可指挥本同盟全部单位，团长可指挥本团团员，无职位者只能指挥自己的单位。
 3. 定位决定行为边界：武将、术武将可前线带兵；法师、疗愈师不统兵，只发言不下达带兵指令。
 4. stance 取 attack / defend / hold / retreat / buildFortress / auto。attack / defend / retreat / buildFortress 必须给出 target，且来自「可占领候选」或己方地块。
-   buildFortress 表示在目标格筑垒：目标必须是道路或关口，且远离主城，建成后会挡住敌方推进。工程档位越高，筑垒越快、拆除工事越强。要塞用来封锁要道，优先修在关口本身或紧邻关口的道路上。
+   buildFortress 表示在目标格筑垒：目标必须是道路或关口，且远离主城，建成后会挡住敌方推进。工程档位越高，筑垒越快、拆除工事越强。要塞用来封锁要道，优先修在关口本身或紧邻关口的道路上；开工要花石料与木材，资源不够时先攒资源再修。
 5. 发言使用角色自己的口吻，承接「环境上下文」里的对话；不要重复已经说过的话，不得与「自身上下文」里的发言雷同，也不要反复使用同一种比喻或句式。
 6. 说话像在频道里跟同僚聊天：用日常词、短句，可以有语气词，别写成檄文或诗。不用文言式缩略和四字词堆叠（如「固已得」「探林缘」「狼烟咬根」），不生造意象，不自称臣、本座之类的古称。
    正例「北边那片丘陵快顶不住了，我让朔风补一手」「先守住现有这几个点，别急着抢」；反例「北侧丘陵狼烟咬根，朔风既已合拢」。
@@ -586,12 +587,14 @@ export class CharacterAgent {
     const orders: AgentOrderDraft[] = []
     const commandables = this.commandableGenerals(snapshot)
 
-    // 模拟 AI 的自主决策：己方工事不足时，派最合适的角色去封锁关口
+    // 模拟 AI 的自主决策：己方工事不足且资源够开工时，派最合适的角色去封锁关口
     let autoFortGeneralId: string | null = null
     let autoFortTarget: Coord | null = null
     if (stance === 'auto') {
       const ownForts = snapshot.forts.filter((fort) => fort.faction === this.card.faction).length
-      if (ownForts < FORT_AUTO_LIMIT) {
+      const pool = snapshot.resources[this.card.faction]
+      const affordable = pool.stone >= FORT_STONE_COST && pool.wood >= FORT_WOOD_COST
+      if (ownForts < FORT_AUTO_LIMIT && affordable) {
         const candidates = this.fortCandidates(snapshot)
         const choose = (
           list: typeof candidates,

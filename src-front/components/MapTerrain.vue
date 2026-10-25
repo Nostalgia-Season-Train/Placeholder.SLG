@@ -16,6 +16,8 @@ import type {
   WorldDTO,
 } from '@shared/protocol'
 import {
+  RESOURCE_KINDS,
+  RESOURCE_NAMES,
   allianceNameOf,
   allianceNamesOf,
   type AllianceConfig,
@@ -75,6 +77,15 @@ function levelColor(level: number): string {
 
 const diplomacy = computed(() => createDiplomacy(alliances.value))
 const allianceNames = computed(() => allianceNamesOf(alliances.value))
+/** 资源条只展示本盟资源；其他同盟的资源池随快照下发但不在此展示 */
+const ownResources = computed(() => snapshot.value?.resources?.[agentFaction.value] ?? null)
+/** 资源面板展开后展示的每期产出与来源 */
+const resourcesOpen = ref(false)
+const ownIncome = computed(() => snapshot.value?.resourceIncome?.[agentFaction.value] ?? null)
+const ownCityCount = computed(
+  () => snapshot.value?.cities.filter((city) => city.owner === agentFaction.value).length ?? 0,
+)
+const ownTileCount = computed(() => snapshot.value?.factionCounts[agentFaction.value] ?? 0)
 
 function relationColorCss(faction: Faction): string {
   return toCss(relationStyleOf(diplomacy.value, faction).fill)
@@ -496,6 +507,35 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <section
+      v-if="ownResources"
+      class="panel resources"
+      role="button"
+      tabindex="0"
+      @click="resourcesOpen = !resourcesOpen"
+      @keydown.enter.prevent="resourcesOpen = !resourcesOpen"
+    >
+      <div v-for="kind in RESOURCE_KINDS" :key="kind" class="res">
+        <span class="res-name">{{ RESOURCE_NAMES[kind] }}</span>
+        <strong class="res-value">{{ Math.floor(ownResources[kind]) }}</strong>
+      </div>
+      <span class="res-more">{{ resourcesOpen ? '收起' : '来源' }}</span>
+    </section>
+
+    <section v-if="ownResources && ownIncome && resourcesOpen" class="panel res-detail">
+      <h3>资源来源</h3>
+      <p class="res-line">每 20 回合结算一次：主城 {{ ownCityCount }} 座 + 占领地块 {{ ownTileCount }} 格</p>
+      <ul class="res-gain">
+        <li v-for="kind in RESOURCE_KINDS" :key="kind">
+          <span class="res-name">{{ RESOURCE_NAMES[kind] }}</span>
+          <strong>+{{ ownIncome[kind] }}</strong>
+        </li>
+      </ul>
+      <p class="res-note">筑垒开工：石料 80 + 木材 60，中断不返还</p>
+      <p class="res-note">休整补兵：每点兵力 粮食 0.5 + 黄金 0.1</p>
+      <p class="res-note">每项存储上限 9999</p>
+    </section>
+
     <aside class="panel info">
       <template v-if="hover">
         <div class="info-head">
@@ -540,7 +580,7 @@ onBeforeUnmount(() => {
       <p v-else class="empty">悬停到地块上查看信息</p>
     </aside>
 
-    <section class="panel comms">
+    <section class="panel comms" :class="{ pushed: resourcesOpen }">
       <div class="comms-head">
         <h2>通讯</h2>
       </div>
@@ -788,6 +828,12 @@ onBeforeUnmount(() => {
             </li>
           </ul>
 
+          <h3>资源</h3>
+          <p>
+            粮食、木材、石料、黄金各自独立结算，每 20 回合按当前归属产出：每座主城定额产出，每格占领地块再有加成。
+            筑垒消耗石料 80、木材 60，中断不返还；休整补兵消耗粮食与黄金。右上角只显示本盟资源，点击资源条可查看产出明细。
+          </p>
+
           <h3>同盟与外交</h3>
           <ul>
             <li v-for="alliance in alliances" :key="alliance.faction">
@@ -919,6 +965,99 @@ onBeforeUnmount(() => {
 
 .head button:hover {
   background: rgba(214, 186, 122, 0.34);
+}
+
+.resources {
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.resources:hover {
+  background: rgba(24, 36, 44, 0.9);
+}
+
+.res {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.res-name {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #8fa0a5;
+}
+
+.res-value {
+  font-size: 14px;
+  color: #f1e6c8;
+  font-variant-numeric: tabular-nums;
+}
+
+.res-more {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #c9b98d;
+}
+
+.res-detail {
+  top: 78px;
+  right: 20px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.res-detail h3 {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: #d8c79a;
+}
+
+.res-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b9c6c9;
+}
+
+.res-gain {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+}
+
+.res-gain li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.res-gain strong {
+  font-size: 13px;
+  color: #f1e6c8;
+  font-variant-numeric: tabular-nums;
+}
+
+.res-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8fa0a5;
 }
 
 .swatch {
@@ -1093,6 +1232,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   pointer-events: auto;
+  transition: top 0.2s ease;
+}
+
+/* 资源明细展开时把通讯面板下移，避免遮挡 */
+.comms.pushed {
+  top: 320px;
 }
 
 .comms-head {
@@ -1529,6 +1674,19 @@ onBeforeUnmount(() => {
 @media (max-width: 820px) {
   .comms {
     display: none;
+  }
+
+  .resources {
+    top: auto;
+    right: 16px;
+    bottom: 56px;
+  }
+
+  .res-detail {
+    top: auto;
+    right: 16px;
+    bottom: 112px;
+    width: 260px;
   }
 
   .head {

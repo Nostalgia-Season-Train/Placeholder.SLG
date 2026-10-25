@@ -657,6 +657,8 @@ export class GameRuntime {
         minions: snapshot.minions,
         forts: snapshot.forts,
         cities: snapshot.cities,
+        resources: snapshot.resources,
+        resourceIncome: snapshot.resourceIncome,
         occupationVersion: snapshot.occupationVersion,
         events: snapshot.events,
         capturedCount: snapshot.capturedCount,

@@ -4,6 +4,8 @@
  */
 import { coordKey, hexDistance, type WorldTerrain } from '../bot/terrain'
 import {
+  RESOURCE_KINDS,
+  RESOURCE_NAMES,
   allianceNameOf,
   personalitySummary,
   type AllianceNames,
@@ -94,6 +96,7 @@ export function buildActorContext(
     可见战况: {
       回合: snapshot.round,
       己方地块数: snapshot.factionCounts[card.faction],
+      己方资源: resourceLine(card.faction, snapshot),
       己方单位: ownGenerals(card.faction, snapshot).map(unitLine),
       周边敌方单位: nearbyEnemies(card.faction, snapshot, deps.allianceNames),
       己方要塞: fortView(card.faction, snapshot, deps.allianceNames, true),
@@ -127,6 +130,12 @@ function speechLine(speech: { round: number; channel: ChatChannel; text: string 
 
 function unitLine(general: GeneralState): string {
   return `${general.id} ${general.name} (${general.coord.q},${general.coord.r}) ${general.status} 战力${general.power} 兵力${general.hp}/${general.maxHp} 工程${general.engineering}`
+}
+
+/** 本同盟资源：角色需要知道自己付得起几座要塞、补得起多少兵 */
+function resourceLine(faction: Faction, snapshot: SimSnapshot): string {
+  const pool = snapshot.resources[faction]
+  return RESOURCE_KINDS.map((kind) => `${RESOURCE_NAMES[kind]}${Math.floor(pool[kind])}`).join(' ')
 }
 
 /** 要塞摘要：己方全部展示，敌方只展示周边可见范围 */

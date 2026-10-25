@@ -203,12 +203,31 @@ export interface FortState {
   builtRound: number
 }
 
+/** 资源种类：粮食 / 木材 / 石料 / 黄金 */
+export const RESOURCE_KINDS = ['food', 'wood', 'stone', 'gold'] as const
+
+export type ResourceKind = (typeof RESOURCE_KINDS)[number]
+
+export const RESOURCE_NAMES: Record<ResourceKind, string> = {
+  food: '粮食',
+  wood: '木材',
+  stone: '石料',
+  gold: '黄金',
+}
+
+/** 一个同盟的资源池；每个同盟独立结算，玩家只看本盟 */
+export type FactionResources = Record<ResourceKind, number>
+
 export interface SimSnapshot {
   round: number
   generals: GeneralState[]
   minions: MinionState[]
   forts: FortState[]
   cities: BaseCity[]
+  /** 各同盟的资源池 */
+  resources: Record<Faction, FactionResources>
+  /** 各同盟当前归属下每 20 Tick 的产出，供界面说明资源来源 */
+  resourceIncome: Record<Faction, FactionResources>
   occupation: Map<string, Faction>
   occupationVersion: number
   events: SimEvent[]
@@ -433,6 +452,8 @@ export interface SimSaveState {
   minions?: MinionState[]
   /** 旧存档没有要塞，读取时按空数组处理 */
   forts?: FortState[]
+  /** 旧存档没有资源，读取时按开局资源处理 */
+  resources?: Record<Faction, FactionResources>
   occupation: [string, Faction][]
   events: SimEvent[]
 }
