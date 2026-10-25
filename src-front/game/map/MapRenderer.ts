@@ -56,7 +56,7 @@ export interface MapRendererOptions {
 
 const CAMERA_OFFSET = new THREE.Vector3(0, 40, 28.5)
 const VIEW_HEIGHT = 34
-const MIN_ZOOM = 0.55
+const MIN_ZOOM = 0.12
 const MAX_ZOOM = 2.6
 
 /**
@@ -95,6 +95,8 @@ export class MapRenderer {
   private hoveredCityKey: string | null = null
   private zoom = 1
   private targetZoom = 1
+  /** 换图后首帧按地图尺寸自动缩放到全图可见 */
+  private fitPending = false
   private elapsed = 0
   private lastFrame = 0
 
@@ -144,6 +146,7 @@ export class MapRenderer {
     this.scene.add(this.highlight)
 
     this.buildMap(options.map)
+    this.fitPending = true
 
     const toWorld = (q: number, r: number): WorldPosition => {
       const tile = this.map?.tileMap.get(tileKey(q, r))
@@ -188,8 +191,8 @@ export class MapRenderer {
     this.options.onHover?.(null)
     this.buildMap(map)
     this.target.set(0, 0, 0)
-    this.zoom = 1
-    this.targetZoom = 1
+    this.fitPending = true
+    this.applyFitZoom()
   }
 
   /** 当前地图数据，供推演层初始化使用 */
@@ -297,6 +300,10 @@ export class MapRenderer {
 
     const map = mapData
     this.map = map
+    // 雾按地图尺寸外扩，否则大地图的远端角落会被雾色吞掉
+    const span = Math.max(map.bounds.maxX - map.bounds.minX, map.bounds.maxZ - map.bounds.minZ)
+    const fogFar = Math.max(168, span * 1.6)
+    this.scene.fog = new THREE.Fog(0x0a1014, fogFar * 0.62, fogFar)
     this.terrainLayer = new TerrainLayer(map)
     this.riverLayer = new RiverLayer(map.rivers)
 
@@ -376,6 +383,26 @@ export class MapRenderer {
     this.camera.updateProjectionMatrix()
 
     this.renderer.setSize(width, height, false)
+    if (this.fitPending) this.applyFitZoom()
+  }
+
+  /** 按地图包围盒算出能看全整张图的缩放；容器尚未布局时留到下一次 resize 再算 */
+  private applyFitZoom(): void {
+    const map = this.map
+    if (!map) return
+    const width = this.container.clientWidth
+    const height = this.container.clientHeight
+    if (width < 2 || height < 2) return
+
+    const aspect = width / height
+    const worldWidth = map.bounds.maxX - map.bounds.minX + 2
+    // 俯视相机带倾角，屏幕纵向覆盖的 z 范围会被压缩，这里按投影比例补回
+    const worldDepth = (map.bounds.maxZ - map.bounds.minZ + 2) * 1.24
+    const fitted = Math.min((VIEW_HEIGHT * aspect) / worldWidth, VIEW_HEIGHT / worldDepth)
+
+    this.zoom = THREE.MathUtils.clamp(fitted, MIN_ZOOM, MAX_ZOOM)
+    this.targetZoom = this.zoom
+    this.fitPending = false
   }
 
   private tick = (timeMs: number): void => {
