@@ -54,6 +54,47 @@ const CHANNEL_NAMES: Record<ChatChannel, string> = {
   team: '本团',
 }
 
+/**
+ * 阶段目标：先开荒抢占无主地块，再在关口一线修要塞群挡住敌方突进，
+ * 最后才转向进攻。LLM 与模拟 AI 共用这一判断，保证两边节奏一致。
+ */
+export type StrategyPhase = '开荒' | '筑垒' | '进攻'
+
+/** 开荒完成的己方地块数 */
+const OPENING_TILES = 10
+/** 进入进攻阶段所需的己方要塞数（含建造中） */
+const FORT_PHASE_FORTS = 2
+/** 敌方单位靠近到这个距离内就提前转入筑垒 */
+const THREAT_RADIUS = 10
+
+const PHASE_HINTS: Record<StrategyPhase, string> = {
+  开荒: `先占本出生区内的无主地块，攒到 ${OPENING_TILES} 块再考虑筑垒；不要越过关口去抢别人区域的地`,
+  筑垒: '在关口或紧邻关口的道路上修要塞群，挡住敌方突进，工事没成型前不要贸然进攻',
+  进攻: '要塞已成网，转向夺取敌方地块',
+}
+
+/** 当前阶段：敌方压境时优先筑垒，否则按地块数与工事数推进 */
+export function strategyPhase(faction: Faction, snapshot: SimSnapshot): StrategyPhase {
+  const tiles = snapshot.factionCounts[faction]
+  const forts = snapshot.forts.filter((fort) => fort.faction === faction).length
+  if (forts < FORT_PHASE_FORTS && enemyPressure(faction, snapshot)) return '筑垒'
+  if (tiles < OPENING_TILES) return '开荒'
+  if (forts < FORT_PHASE_FORTS) return '筑垒'
+  return '进攻'
+}
+
+function phaseLine(faction: Faction, snapshot: SimSnapshot): string {
+  const phase = strategyPhase(faction, snapshot)
+  return `${phase}：${PHASE_HINTS[phase]}`
+}
+
+function enemyPressure(faction: Faction, snapshot: SimSnapshot): boolean {
+  const centroid = factionCentroid(faction, snapshot)
+  return snapshot.generals.some(
+    (general) => general.faction !== faction && hexDistance(centroid, general.coord) <= THREAT_RADIUS,
+  )
+}
+
 const TRIGGER_LABELS: Record<ActorTrigger['kind'], string> = {
   player: '玩家发言',
   keypoint: '局势变化',
@@ -95,6 +136,7 @@ export function buildActorContext(
     },
     可见战况: {
       回合: snapshot.round,
+      阶段建议: phaseLine(card.faction, snapshot),
       己方地块数: snapshot.factionCounts[card.faction],
       己方资源: resourceLine(card.faction, snapshot),
       己方单位: ownGenerals(card.faction, snapshot).map(unitLine),
@@ -183,6 +225,16 @@ function isTriggerLine(message: ChatMessage, text: string | undefined, round: nu
   )
 }
 
+/** 同盟出生区：按该同盟主城所在地块判断；找不到时返回 -1 表示不限区域 */
+function homeRegion(faction: Faction, snapshot: SimSnapshot, terrain: WorldTerrain): number {
+  for (const city of snapshot.cities) {
+    if (city.faction !== faction) continue
+    const region = terrain.tiles.get(coordKey(city.coord))?.region ?? -1
+    if (region >= 0) return region
+  }
+  return -1
+}
+
 function ownGenerals(faction: Faction, snapshot: SimSnapshot): GeneralState[] {
   return snapshot.generals.filter((general) => general.faction === faction)
 }
@@ -239,7 +291,11 @@ function candidates(
 ): unknown[] {
   const centroid = factionCentroid(faction, snapshot)
   const fortKeys = new Set(snapshot.forts.map((fort) => coordKey(fort.coord)))
+  // 开荒与筑垒阶段只给出本出生区（含关口）的候选，进攻阶段才放开到全图
+  const home = homeRegion(faction, snapshot, terrain)
+  const phase = strategyPhase(faction, snapshot)
   return terrain.capturable
+    .filter((tile) => phase === '进攻' || tile.gate || home < 0 || tile.region === home)
     .filter((tile) => snapshot.occupation.get(coordKey(tile.coord)) !== faction)
     .filter((tile) => !fortKeys.has(coordKey(tile.coord)))
     .map((tile) => {

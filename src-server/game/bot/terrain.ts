@@ -22,6 +22,8 @@ export interface TileInfo {
   road: boolean
   /** 关口，连接两个出生区，兵线可通过 */
   gate: boolean
+  /** 出生区编号：不跨关口连通，关口本身为 -1 */
+  region: number
 }
 
 export interface WorldTerrain {
@@ -98,11 +100,34 @@ export function buildTerrain(map: MapData): WorldTerrain {
       passable,
       road: onRoad,
       gate: tile.isGate,
+      region: -1,
     }
 
     tiles.set(coordKey(info.coord), info)
     if (passable) capturable.push(info)
     maxLevel = Math.max(maxLevel, info.level)
+  }
+
+  // 出生区：只沿可通行地块扩散，遇到关口即止，关口本身不属于任何一区
+  let nextRegion = 0
+  for (const start of capturable) {
+    if (start.gate || start.region >= 0) continue
+    const id = nextRegion
+    nextRegion += 1
+    start.region = id
+
+    const queue: TileInfo[] = [start]
+    while (queue.length > 0) {
+      const current = queue.pop()!
+      for (const offset of NEIGHBOR_OFFSETS) {
+        const next = tiles.get(
+          coordKey({ q: current.coord.q + offset.q, r: current.coord.r + offset.r }),
+        )
+        if (!next?.passable || next.gate || next.region >= 0) continue
+        next.region = id
+        queue.push(next)
+      }
+    }
   }
 
   return { tiles, capturable, maxLevel }

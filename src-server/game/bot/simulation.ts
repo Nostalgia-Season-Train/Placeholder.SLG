@@ -185,6 +185,8 @@ export class MarchSimulation {
     gold: { ...INITIAL_RESOURCES },
   }
   private readonly occupation = new Map<string, Faction>()
+  /** 各同盟的出生区编号：例行开荒只在本区内挑地，不越关口 */
+  private readonly homeRegions: Record<Faction, number> = { red: -1, cyan: -1, gold: -1 }
   private readonly events: SimEvent[] = []
   private readonly signals: SimSignal[] = []
   private readonly reports: SimReport[] = []
@@ -221,11 +223,22 @@ export class MarchSimulation {
       this.eventLimit = restore.eventLimit
       this.events.push(...restore.events.map((event) => ({ ...event })))
       this.rng.state = restore.rngState
+      this.assignHomeRegions()
       return
     }
 
     this.cities = this.createCities(map)
     this.generals = []
+    this.assignHomeRegions()
+  }
+
+  /** 按主城所在地块标出每个同盟的出生区，供例行开荒限定范围 */
+  private assignHomeRegions(): void {
+    for (const city of this.cities) {
+      if (this.homeRegions[city.faction] >= 0) continue
+      const region = getTile(this.terrain, city.coord)?.region ?? -1
+      if (region >= 0) this.homeRegions[city.faction] = region
+    }
   }
 
   /** Serializable mid-run state used by the save system */
@@ -1091,6 +1104,7 @@ export class MarchSimulation {
       locked,
       this.random,
       exclude,
+      this.homeRegions[general.faction],
     )
     if (!choice) return
 
@@ -1373,6 +1387,15 @@ export class MarchSimulation {
 
   /** 撤退落点：在可通行的相邻地块中，选离最近敌军最远的一块 */
   private retreatTile(loser: GeneralState): Coord | null {
+    // 优先退回本出生区：败退时穿过关口会直接掉进敌方区域
+    const home = this.homeRegions[loser.faction]
+    const local = this.pickRetreat(loser, home)
+    if (local || home < 0) return local
+    return this.pickRetreat(loser, -1)
+  }
+
+  /** 在指定出生区（-1 表示不限）内挑离敌军最远的相邻可通行地块 */
+  private pickRetreat(loser: GeneralState, region: number): Coord | null {
     let best: Coord | null = null
     let bestDistance = -Infinity
     const hostile = this.hostileFactions(loser.faction)
@@ -1380,6 +1403,7 @@ export class MarchSimulation {
     for (const neighbor of neighbors(loser.coord)) {
       const tile = getTile(this.terrain, neighbor)
       if (!tile?.passable) continue
+      if (region >= 0 && tile.region !== region) continue
 
       // 敌方要塞占格不可进入
       const fort = this.readyFortAt(neighbor)

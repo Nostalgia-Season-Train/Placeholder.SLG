@@ -26,54 +26,63 @@ export function chooseTarget(
   locked: Set<string>,
   random: () => number,
   exclude: Set<string> = new Set(),
+  homeRegion = -1,
 ): TargetChoice | null {
-  const personality = general.personality
-  const weight = Math.max(
-    0.45,
-    Math.min(1.6, 0.7 + personality.caution * 0.9 - personality.aggression * 0.35),
-  )
-  const candidates: { tile: TileInfo; roughScore: number }[] = []
+  // 先只在本出生区内挑地，本区无地可占时再放开关口，避免开局被派去别人区域
+  const inRegion = homeRegion >= 0 ? pickBestInRegion(true) : null
+  if (inRegion) return inRegion
+  return homeRegion >= 0 ? pickBestInRegion(false) : pickBestInRegion(true)
 
-  for (const tile of terrain.capturable) {
-    const key = coordKey(tile.coord)
-    if (exclude.has(key)) continue
-    const owner = occupation.get(key)
-    if (owner === general.faction) continue
+  function pickBestInRegion(restrict: boolean): TargetChoice | null {
+    const personality = general.personality
+    const weight = Math.max(
+      0.45,
+      Math.min(1.6, 0.7 + personality.caution * 0.9 - personality.aggression * 0.35),
+    )
+    const candidates: { tile: TileInfo; roughScore: number }[] = []
 
-    const distance = hexDistance(general.coord, tile.coord)
-    if (distance === 0) continue
+    for (const tile of terrain.capturable) {
+      if (restrict && tile.region !== homeRegion) continue
+      const key = coordKey(tile.coord)
+      if (exclude.has(key)) continue
+      const owner = occupation.get(key)
+      if (owner === general.faction) continue
 
-    const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
-    const lockPenalty = locked.has(key) ? 30 : 0
-    const roughScore = tile.value + enemyBonus - distance * weight * 2 - lockPenalty
+      const distance = hexDistance(general.coord, tile.coord)
+      if (distance === 0) continue
 
-    candidates.push({ tile, roughScore })
-  }
+      const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
+      const lockPenalty = locked.has(key) ? 30 : 0
+      const roughScore = tile.value + enemyBonus - distance * weight * 2 - lockPenalty
 
-  candidates.sort((a, b) => b.roughScore - a.roughScore)
+      candidates.push({ tile, roughScore })
+    }
 
-  let best: TargetChoice | null = null
-  let bestScore = -Infinity
+    candidates.sort((a, b) => b.roughScore - a.roughScore)
 
-  for (const entry of candidates.slice(0, MAX_CANDIDATES)) {
-    const result = findPath(terrain, general.coord, entry.tile.coord)
-    if (!result || result.path.length === 0) continue
-    if (result.cost > MAX_PATH_COST) continue
+    let best: TargetChoice | null = null
+    let bestScore = -Infinity
 
-    const owner = occupation.get(coordKey(entry.tile.coord))
-    const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
-    const score = entry.tile.value + enemyBonus - result.cost * weight + random() * 3
+    for (const entry of candidates.slice(0, MAX_CANDIDATES)) {
+      const result = findPath(terrain, general.coord, entry.tile.coord)
+      if (!result || result.path.length === 0) continue
+      if (result.cost > MAX_PATH_COST) continue
 
-    if (score > bestScore) {
-      bestScore = score
-      best = {
-        target: entry.tile.coord,
-        path: result.path,
-        cost: result.cost,
-        value: entry.tile.value,
+      const owner = occupation.get(coordKey(entry.tile.coord))
+      const enemyBonus = owner ? 6 + personality.aggression * 14 + personality.assault * 10 : 0
+      const score = entry.tile.value + enemyBonus - result.cost * weight + random() * 3
+
+      if (score > bestScore) {
+        bestScore = score
+        best = {
+          target: entry.tile.coord,
+          path: result.path,
+          cost: result.cost,
+          value: entry.tile.value,
+        }
       }
     }
-  }
 
-  return best
+    return best
+  }
 }
