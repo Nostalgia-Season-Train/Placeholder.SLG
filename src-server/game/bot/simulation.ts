@@ -191,6 +191,8 @@ export class MarchSimulation {
   private readonly events: SimEvent[] = []
   private readonly signals: SimSignal[] = []
   private readonly reports: SimReport[] = []
+  /** 主城被敌方攻破的同盟：只记录战败并播报，不暂停推演 */
+  private readonly defeated = new Set<Faction>()
   private round = 0
   private occupationVersion = 0
   private eventLimit = 14
@@ -750,7 +752,12 @@ export class MarchSimulation {
     this.occupation.set(coordKey(city.coord), attacker)
     this.occupationVersion += 1
 
-    const text = `${this.nameOf(attacker)}攻破${city.name}，${this.nameOf(previous)}失城`
+    // 本同盟自己的主城被敌方攻破即视为战败：写入战报播报，但推演继续
+    const fallen = city.faction === previous && !this.defeated.has(previous)
+    if (fallen) this.defeated.add(previous)
+    const text = fallen
+      ? `${this.nameOf(attacker)}攻破${city.name}，${this.nameOf(previous)}战败`
+      : `${this.nameOf(attacker)}攻破${city.name}，${this.nameOf(previous)}失城`
     this.log(attacker, text)
     this.reports.push({ round: this.round, faction: attacker, text })
     this.signal('lost', previous, null, '主城失守', `${city.name}被${this.nameOf(attacker)}攻破`)
