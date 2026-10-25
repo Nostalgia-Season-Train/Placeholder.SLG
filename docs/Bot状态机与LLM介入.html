@@ -60,33 +60,24 @@
   .panel h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--text); }
   .panel h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
 
-  .row { margin: 0 0 14px; }
-  .row:last-child { margin-bottom: 0; }
-  .row .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; letter-spacing: .06em; }
-  .track { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
-
-  .node {
-    flex: 0 0 auto; min-width: 92px; padding: 9px 15px; text-align: center;
-    background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px;
-  }
-  .node strong { display: block; font-size: 14px; font-weight: 600; line-height: 1.4; }
-  .node em { display: block; font-style: normal; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
-  .node.hint { border-style: dashed; color: var(--muted); }
-  .node.hint strong { font-weight: 500; font-size: 13px; }
-  .node.rest { border-color: rgba(224, 108, 108, .55); }
-  .node.fight { border-color: rgba(169, 139, 224, .55); }
-  .node.fort { border-color: rgba(99, 196, 139, .55); }
-
-  .edge {
-    flex: 1 1 96px; min-width: 86px; padding: 0 6px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-  }
-  .edge .cond { font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.45; }
-  .edge .line { position: relative; width: 100%; height: 1px; background: var(--line-strong); margin-top: 6px; }
-  .edge .line::after {
-    content: ""; position: absolute; right: -1px; top: -3px;
-    border-left: 6px solid var(--gold); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
-  }
+  .diagram { width: 100%; height: auto; display: block; }
+  .diagram text { font-family: inherit; }
+  .st-box { fill: var(--panel-2); stroke: var(--line-strong); stroke-width: 1.4; }
+  .st-box.cmd { stroke: rgba(90, 169, 230, .7); }
+  .st-box.decide { stroke: rgba(216, 180, 90, .7); }
+  .st-box.act { stroke: rgba(99, 196, 139, .7); }
+  .st-box.rest { stroke: rgba(224, 108, 108, .7); }
+  .st-box.fight { stroke: rgba(169, 139, 224, .7); }
+  .st-box.fort { stroke: rgba(99, 196, 139, .7); }
+  .st-name { font-size: 14px; font-weight: 600; fill: var(--text); text-anchor: middle; }
+  .st-en { font-size: 10.5px; fill: var(--muted); text-anchor: middle; }
+  .st-flow { fill: none; stroke: var(--line-strong); stroke-width: 1.4; }
+  .st-flow.back { stroke: var(--gold); stroke-opacity: .85; }
+  .st-flow.dashed { stroke-dasharray: 5 4; }
+  .st-label { font-size: 11px; fill: var(--muted); }
+  .st-label.mid { text-anchor: middle; }
+  .st-label.end { text-anchor: end; }
+  .st-pill { fill: var(--panel-2); stroke: var(--line-strong); stroke-dasharray: 4 3; stroke-width: 1.2; }
 
   .note { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
   .note b { color: var(--text); font-weight: 600; }
@@ -114,25 +105,6 @@
   .card h4 { margin: 0 0 4px; font-size: 14px; }
   .card .who { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .card p { margin: 0; font-size: 13px; color: var(--text); }
-
-  .steps { counter-reset: step; margin: 0; padding: 0; list-style: none; }
-  .steps li {
-    position: relative; padding: 0 0 20px 46px; border-left: 1px solid var(--line);
-    margin-left: 14px;
-  }
-  .steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
-  .steps li::before {
-    counter-increment: step; content: counter(step);
-    position: absolute; left: -14px; top: -2px; width: 28px; height: 28px; border-radius: 50%;
-    background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--gold);
-    font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
-  }
-  .steps strong { display: block; font-size: 14px; font-weight: 600; }
-  .steps code {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
-    color: var(--gold); background: rgba(216, 180, 90, .1); padding: 1px 5px; border-radius: 4px;
-  }
-  .steps span { display: block; font-size: 13px; color: var(--muted); }
 
   .triggers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .trigger { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -177,98 +149,85 @@
     <p class="sub"><code>GeneralState.status</code> 六个取值，每 Tick 对未锁定、未休整的单位调用一次 <code>act()</code>。</p>
 
     <div class="panel">
-      <h3>主循环<small>休整 → 待命 → 行军 → 占领 → 驻守</small></h3>
+      <h3>状态图<small>实线为常规转移，虚线为指令或打断</small></h3>
 
-      <div class="row">
-        <div class="track">
-          <div class="node rest"><strong>休整</strong><em>resting</em></div>
-          <div class="edge">
-            <span class="cond">restTurns 归零</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>待命</strong><em>idle</em></div>
-          <div class="edge">
-            <span class="cond">有目标<br />（自主选点或指令）</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>行军</strong><em>marching</em></div>
-          <div class="edge">
-            <span class="cond">抵达非己方<br />非主城的格子</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>占领</strong><em>capturing</em></div>
-          <div class="edge">
-            <span class="cond">进度达标<br />（等级 + 1，至少 2）</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>驻守</strong><em>garrison</em></div>
-        </div>
-      </div>
+      <svg class="diagram" viewBox="0 0 1120 470" role="img" aria-label="Bot 状态转移图">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+          </marker>
+        </defs>
 
-      <div class="row">
-        <div class="track">
-          <div class="node hint"><strong>待命 / 行军 / 占领 / 驻守</strong><em>任意非交战状态</em></div>
-          <div class="edge">
-            <span class="cond">同格或相邻出现敌军<br />（休整、脱战保护期内除外）</span>
-            <span class="line"></span>
-          </div>
-          <div class="node fight"><strong>交战</strong><em>fighting</em></div>
-          <div class="edge">
-            <span class="cond">兵力归零<br />退到相邻空格</span>
-            <span class="line"></span>
-          </div>
-          <div class="node rest"><strong>休整</strong><em>resting × 2 Tick</em></div>
-          <div class="edge">
-            <span class="cond">restTurns 归零</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>待命</strong><em>idle</em></div>
-        </div>
-      </div>
+        <rect class="st-box act" x="160" y="158" width="130" height="64" rx="10" />
+        <text class="st-name" x="225" y="186">待命</text>
+        <text class="st-en" x="225" y="204">idle</text>
 
-      <div class="row">
-        <div class="track">
-          <div class="node fight"><strong>交战</strong><em>fighting</em></div>
-          <div class="edge">
-            <span class="cond">敌军离开<br />解除锁定</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>行军</strong><em>marching</em></div>
-          <div class="edge">
-            <span class="cond">收到 retreat 指令<br />脱战退一格 + 2 Tick 保护</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>行军</strong><em>marching</em></div>
-        </div>
-      </div>
+        <rect class="st-box act" x="405" y="158" width="130" height="64" rx="10" />
+        <text class="st-name" x="470" y="186">行军</text>
+        <text class="st-en" x="470" y="204">marching</text>
 
-      <div class="note">
-        交战锁定的单位当 Tick 不移动、不占领，只结算一次普攻；休整中的单位不参与交战判定。<br />
-        到达己方地块或主城格直接转驻守；主城格只由小兵破城改归属，角色不占领。
-      </div>
-    </div>
+        <rect class="st-box act" x="650" y="158" width="130" height="64" rx="10" />
+        <text class="st-name" x="715" y="186">占领</text>
+        <text class="st-en" x="715" y="204">capturing</text>
 
-    <div class="panel">
-      <h3>筑垒分支<small>buildFortress 指令</small></h3>
+        <rect class="st-box act" x="885" y="158" width="130" height="64" rx="10" />
+        <text class="st-name" x="950" y="186">驻守</text>
+        <text class="st-en" x="950" y="204">garrison</text>
 
-      <div class="row">
-        <div class="track">
-          <div class="node"><strong>行军</strong><em>marching</em></div>
-          <div class="edge">
-            <span class="cond">站上道路 / 关口目标<br />扣石料 80 + 木材 60</span>
-            <span class="line"></span>
-          </div>
-          <div class="node fort"><strong>筑垒施工</strong><em>capturing（建造中）</em></div>
-          <div class="edge">
-            <span class="cond">进度 18 / 12 / 8<br />（低 / 中 / 高工程）</span>
-            <span class="line"></span>
-          </div>
-          <div class="node"><strong>驻守</strong><em>garrison</em></div>
-        </div>
-      </div>
+        <rect class="st-box rest" x="160" y="358" width="130" height="64" rx="10" />
+        <text class="st-name" x="225" y="386">休整</text>
+        <text class="st-en" x="225" y="404">resting</text>
+
+        <rect class="st-box fight" x="405" y="358" width="130" height="64" rx="10" />
+        <text class="st-name" x="470" y="386">交战</text>
+        <text class="st-en" x="470" y="404">fighting</text>
+
+        <rect class="st-box fort" x="405" y="20" width="130" height="64" rx="10" />
+        <text class="st-name" x="470" y="48">筑垒施工</text>
+        <text class="st-en" x="470" y="66">buildFortress</text>
+
+        <path class="st-flow" d="M 290 190 H 398" marker-end="url(#arrow)" />
+        <text class="st-label mid" x="347" y="176">有目标（选点或指令）</text>
+
+        <path class="st-flow" d="M 535 190 H 643" marker-end="url(#arrow)" />
+        <text class="st-label mid" x="588" y="176">抵达非己方格</text>
+
+        <path class="st-flow" d="M 780 190 H 878" marker-end="url(#arrow)" />
+        <text class="st-label mid" x="828" y="176">进度达标</text>
+
+        <path class="st-flow" d="M 950 222 V 290 H 515 V 222" marker-end="url(#arrow)" />
+        <text class="st-label" x="740" y="282">无 hold 指令时重新选点</text>
+
+        <path class="st-flow" d="M 225 358 V 222" marker-end="url(#arrow)" />
+        <text class="st-label" x="235" y="300">restTurns 归零</text>
+
+        <path class="st-flow" d="M 405 390 H 290" marker-end="url(#arrow)" />
+        <text class="st-label mid" x="350" y="376">兵力归零撤退</text>
+
+        <path class="st-flow" d="M 440 358 V 222" marker-end="url(#arrow)" />
+        <text class="st-label" x="450" y="300">敌军离开 / 脱战</text>
+
+        <path class="st-flow" d="M 470 158 V 92" marker-end="url(#arrow)" />
+        <text class="st-label" x="480" y="122">站上道路 / 关口目标</text>
+        <text class="st-label" x="480" y="136">扣石料 80 + 木材 60</text>
+
+        <path class="st-flow" d="M 425 158 C 405 128 448 122 455 158" marker-end="url(#arrow)" />
+        <text class="st-label end" x="420" y="120">每 Tick 一格</text>
+
+        <path class="st-flow" d="M 535 52 H 950 V 158" marker-end="url(#arrow)" />
+        <text class="st-label end" x="940" y="112">建成（进度 18 / 12 / 8）</text>
+
+        <path class="st-flow dashed" d="M 405 52 H 225 V 158" marker-end="url(#arrow)" />
+        <text class="st-label" x="235" y="110">被打断清空</text>
+
+        <path class="st-flow dashed" d="M 715 222 V 326 H 500 V 358" marker-end="url(#arrow)" />
+        <text class="st-label mid" x="620" y="318">出现敌军</text>
+      </svg>
 
       <div class="note">
-        换指令、主动撤退、战败撤退都会清空半成品：<b>进度与已扣资源都不返还</b>；资源不足时不开工，指令被清空并回传「资源不足」信号。
+        待命 / 行军 / 占领 / 驻守 任一处出现同格或相邻敌军都会转入交战（休整中与 2 Tick 脱战保护期内除外）；交战锁定的单位当 Tick 不移动、不占领，只结算一次普攻。<br />
+        到达己方地块或主城格直接转驻守；主城格只由小兵破城改归属，角色不占领。<br />
+        筑垒被打断（换指令、主动撤退、战败撤退、资源不足）会清空半成品，<b>进度与已扣资源都不返还</b>。
       </div>
     </div>
 
@@ -345,33 +304,66 @@
     </div>
 
     <div class="panel">
-      <h3>介入链路<small>一次决策到下一次行动</small></h3>
-      <ol class="steps">
-        <li>
-          <strong>世界回合循环 <code>advance()</code></strong>
-          <span>每 Tick 调用 <code>sim.step()</code>，Bot 状态机逐单位推进；推演结束发出回合信号。</span>
-        </li>
-        <li>
-          <strong><code>RoundGate</code> 放行</strong>
-          <span>广播回合号，所有停在 <code>await</code> 的角色协程在同一边界恢复。</span>
-        </li>
-        <li>
-          <strong>角色协程 <code>tick()</code></strong>
-          <span><code>claimTrigger()</code> 按优先级判定本回合是否决策：玩家发言 &gt; 关键点 &gt; 随机时间 &gt; 世界发言。</span>
-        </li>
-        <li>
-          <strong><code>buildActorContext()</code></strong>
-          <span>自身上下文（自己的指令与发言）+ 环境上下文（三个频道最近发言）+ 可见战况（单位、候选、资源）。</span>
-        </li>
-        <li>
-          <strong>LLM 或模拟 LLM</strong>
-          <span>输出 JSON <code>{ reply, orders }</code>；超时、解析失败或未配置 API 时回退模拟 LLM，格式不变。</span>
-        </li>
-        <li>
-          <strong><code>applyOrders()</code> → <code>sim.setOrder()</code></strong>
-          <span>订单写入单位，下一个 Tick 由 Bot 状态机接管；<code>reply</code> 落到触发来源对应的频道。</span>
-        </li>
-      </ol>
+      <h3>介入链路<small>每 Tick 闭环，LLM 只在环上走一步</small></h3>
+
+      <svg class="diagram" viewBox="0 0 1120 460" role="img" aria-label="LLM 介入链路">
+        <defs>
+          <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+          </marker>
+          <marker id="arrow-gold" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#d8b45a" />
+          </marker>
+        </defs>
+
+        <rect class="st-box act" x="460" y="48" width="200" height="64" rx="10" />
+        <text class="st-name" x="560" y="76">世界回合循环</text>
+        <text class="st-en" x="560" y="94">advance() · sim.step()</text>
+
+        <rect class="st-box decide" x="830" y="198" width="200" height="64" rx="10" />
+        <text class="st-name" x="930" y="226">判定是否决策</text>
+        <text class="st-en" x="930" y="244">claimTrigger()</text>
+
+        <rect class="st-box decide" x="630" y="348" width="200" height="64" rx="10" />
+        <text class="st-name" x="730" y="376">组装上下文</text>
+        <text class="st-en" x="730" y="394">buildActorContext()</text>
+
+        <rect class="st-box decide" x="270" y="348" width="200" height="64" rx="10" />
+        <text class="st-name" x="370" y="376">LLM / 模拟 LLM</text>
+        <text class="st-en" x="370" y="394">输出 { reply, orders }</text>
+
+        <rect class="st-box cmd" x="70" y="198" width="200" height="64" rx="10" />
+        <text class="st-name" x="170" y="226">写指令</text>
+        <text class="st-en" x="170" y="244">applyOrders() · setOrder()</text>
+
+        <rect class="st-pill" x="850" y="316" width="220" height="46" rx="23" />
+        <text class="st-label mid" x="960" y="336">玩家发言 · 关键点</text>
+        <text class="st-label mid" x="960" y="352">随机时间 · 世界发言</text>
+
+        <path class="st-flow" d="M 660 92 L 828 200" marker-end="url(#arrow2)" />
+        <text class="st-label" x="720" y="112">广播回合号，RoundGate 放行</text>
+
+        <path class="st-flow" d="M 880 262 L 800 348" marker-end="url(#arrow2)" />
+        <text class="st-label end" x="845" y="318">按优先级判定</text>
+
+        <path class="st-flow dashed" d="M 960 316 V 262" marker-end="url(#arrow2)" />
+        <text class="st-label" x="968" y="292">触发</text>
+
+        <path class="st-flow" d="M 630 380 H 478" marker-end="url(#arrow2)" />
+        <text class="st-label mid" x="554" y="370">自身上下文 + 环境上下文</text>
+
+        <path class="st-flow" d="M 270 380 L 172 262" marker-end="url(#arrow2)" />
+        <text class="st-label" x="190" y="330">超时 / 解析失败</text>
+        <text class="st-label" x="190" y="344">回退模拟 LLM</text>
+
+        <path class="st-flow back" d="M 170 198 L 458 100" marker-end="url(#arrow-gold)" />
+        <text class="st-label mid" x="310" y="150">下一 Tick 由 Bot 接管</text>
+      </svg>
+
+      <div class="note">
+        世界回合循环每 Tick 推进一次；角色协程只在回合边界被放行，判定该不该决策，再组装上下文并调用 LLM。
+        订单写入单位后，下一个 Tick 由 Bot 状态机执行，形成闭环。订单只描述「姿态 + 目标格」，不含逐格路径。
+      </div>
     </div>
 
     <div class="panel">
