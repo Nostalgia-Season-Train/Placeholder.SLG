@@ -49,6 +49,15 @@ export const DEFAULT_ALLIANCES: AllianceConfig[] = [
   { faction: 'gold', name: '西陵', relation: 'hostile' },
 ]
 
+/** 敌对关系：敌方与其余所有同盟开战；我方与友方互不敌对 */
+export function hostileFactionsOf(alliances: AllianceConfig[], faction: Faction): Faction[] {
+  const hostile = alliances.filter((item) => item.relation === 'hostile').map((item) => item.faction)
+  if (hostile.includes(faction)) {
+    return alliances.map((item) => item.faction).filter((other) => other !== faction)
+  }
+  return hostile.filter((other) => other !== faction)
+}
+
 /** 运行期显示用的同盟名称表；缺省回落到内置名称 */
 export type AllianceNames = Partial<Record<Faction, string>>
 
@@ -220,6 +229,8 @@ export type FactionResources = Record<ResourceKind, number>
 
 export interface SimSnapshot {
   round: number
+  /** 各同盟的敌对同盟；友方之间互不敌对，交战、夺地与选目标都以它为准 */
+  hostile: Record<Faction, Faction[]>
   generals: GeneralState[]
   minions: MinionState[]
   forts: FortState[]

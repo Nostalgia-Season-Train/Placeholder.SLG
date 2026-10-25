@@ -18,6 +18,7 @@ import {
 import {
   FACTIONS,
   ORDER_LABELS,
+  hostileFactionsOf,
   RESOURCE_KINDS,
   personalityOf,
   type AllianceConfig,
@@ -350,8 +351,12 @@ export class MarchSimulation {
     const factionCounts: Record<Faction, number> = { red: 0, cyan: 0, gold: 0 }
     for (const faction of this.occupation.values()) factionCounts[faction] += 1
 
+    const hostile = {} as Record<Faction, Faction[]>
+    for (const faction of FACTIONS) hostile[faction] = hostileFactionsOf(this.alliances, faction)
+
     return {
       round: this.round,
+      hostile,
       generals: this.generals.map((general) => ({
         ...general,
         coord: { ...general.coord },
@@ -514,18 +519,7 @@ export class MarchSimulation {
 
   /** 关系为「敌方」的同盟与其余所有同盟互为敌对；我方与友方互为友军 */
   private hostileFactions(faction: Faction): Set<Faction> {
-    const hostile = new Set(
-      this.alliances.filter((item) => item.relation === 'hostile').map((item) => item.faction),
-    )
-    if (hostile.has(faction)) {
-      return new Set(
-        this.alliances
-          .map((item) => item.faction)
-          .filter((other) => other !== faction && !hostile.has(other)),
-      )
-    }
-    hostile.delete(faction)
-    return hostile
+    return new Set(hostileFactionsOf(this.alliances, faction))
   }
 
   /** 主城相邻的道路或关口地块，作为兵线终点候选 */
@@ -1105,6 +1099,7 @@ export class MarchSimulation {
       this.random,
       exclude,
       this.homeRegions[general.faction],
+      this.hostileFactions(general.faction),
     )
     if (!choice) return
 
@@ -1134,6 +1129,18 @@ export class MarchSimulation {
 
     const owner = this.occupation.get(key)
     if (owner === general.faction) {
+      general.target = null
+      general.path = []
+      general.captureProgress = 0
+      general.status = 'garrison'
+      if (general.order?.stance === 'attack' || general.order?.stance === 'retreat') {
+        general.order = null
+      }
+      return
+    }
+
+    // 友方地块不夺取：即使指令指向友军地盘，到达后也只驻守
+    if (owner && !this.hostileFactions(general.faction).has(owner)) {
       general.target = null
       general.path = []
       general.captureProgress = 0
@@ -1250,10 +1257,12 @@ export class MarchSimulation {
     if (unit.kind === 'general') {
       if (unit.unit.restTurns > 0 || unit.unit.retreatGrace > 0) return false
     }
+    // 只有敌对同盟才会交战：我方与友方相邻或同格都不会被拖入战斗
+    const hostile = this.hostileFactions(unit.unit.faction)
     return units.some(
       (other) =>
         other.unit !== unit.unit &&
-        other.unit.faction !== unit.unit.faction &&
+        hostile.has(other.unit.faction) &&
         (other.kind === 'minion' || other.unit.restTurns === 0) &&
         hexDistance(other.unit.coord, unit.unit.coord) <= 1,
     )
@@ -1308,8 +1317,9 @@ export class MarchSimulation {
 
   /** 同格敌人优先，其次是相邻敌人；同等条件下优先攻击兵力最少者 */
   private chooseCombatTarget(fighter: CombatUnit, units: CombatUnit[]): CombatUnit | null {
+    const hostile = this.hostileFactions(fighter.unit.faction)
     const enemies = units.filter(
-      (other) => other.unit !== fighter.unit && other.unit.faction !== fighter.unit.faction,
+      (other) => other.unit !== fighter.unit && hostile.has(other.unit.faction),
     )
     if (enemies.length === 0) return null
 
@@ -1377,10 +1387,11 @@ export class MarchSimulation {
   }
 
   private enemyOnTile(general: GeneralState): GeneralState | undefined {
+    const hostile = this.hostileFactions(general.faction)
     return this.generals.find(
       (other) =>
         other !== general &&
-        other.faction !== general.faction &&
+        hostile.has(other.faction) &&
         coordKey(other.coord) === coordKey(general.coord),
     )
   }
@@ -1411,7 +1422,7 @@ export class MarchSimulation {
 
       let nearestEnemy = Infinity
       for (const other of this.generals) {
-        if (other === loser || other.faction === loser.faction) continue
+        if (other === loser || !hostile.has(other.faction)) continue
         if (coordKey(other.coord) === coordKey(neighbor)) {
           nearestEnemy = -Infinity
           break

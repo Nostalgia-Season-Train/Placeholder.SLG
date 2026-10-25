@@ -90,8 +90,9 @@ function phaseLine(faction: Faction, snapshot: SimSnapshot): string {
 
 function enemyPressure(faction: Faction, snapshot: SimSnapshot): boolean {
   const centroid = factionCentroid(faction, snapshot)
+  const hostile = new Set(snapshot.hostile[faction])
   return snapshot.generals.some(
-    (general) => general.faction !== faction && hexDistance(centroid, general.coord) <= THREAT_RADIUS,
+    (general) => hostile.has(general.faction) && hexDistance(centroid, general.coord) <= THREAT_RADIUS,
   )
 }
 
@@ -188,8 +189,10 @@ function fortView(
   own: boolean,
 ): string[] {
   const centroid = factionCentroid(faction, snapshot)
+  const hostile = new Set(snapshot.hostile[faction])
   return snapshot.forts
-    .filter((fort) => (fort.faction === faction) === own)
+    // 「敌方要塞」只列敌对同盟的工事，友方要塞不算敌方
+    .filter((fort) => (own ? fort.faction === faction : hostile.has(fort.faction)))
     .filter((fort) => own || hexDistance(centroid, fort.coord) <= SIGHT_RADIUS)
     .sort((a, b) => a.builtRound - b.builtRound || a.id.localeCompare(b.id))
     .slice(0, FORT_LIMIT)
@@ -271,8 +274,9 @@ function nearbyEnemies(
   names: AllianceNames,
 ): unknown[] {
   const centroid = factionCentroid(faction, snapshot)
+  const hostile = new Set(snapshot.hostile[faction])
   return snapshot.generals
-    .filter((general) => general.faction !== faction)
+    .filter((general) => hostile.has(general.faction))
     .map((general) => ({ general, distance: hexDistance(centroid, general.coord) }))
     .filter((entry) => entry.distance <= SIGHT_RADIUS)
     .sort((a, b) => a.distance - b.distance)
@@ -294,9 +298,15 @@ function candidates(
   // 开荒与筑垒阶段只给出本出生区（含关口）的候选，进攻阶段才放开到全图
   const home = homeRegion(faction, snapshot, terrain)
   const phase = strategyPhase(faction, snapshot)
+  const hostile = new Set(snapshot.hostile[faction])
   return terrain.capturable
     .filter((tile) => phase === '进攻' || tile.gate || home < 0 || tile.region === home)
     .filter((tile) => snapshot.occupation.get(coordKey(tile.coord)) !== faction)
+    // 友方地块不列进候选：友盟的地不是可进攻目标
+    .filter((tile) => {
+      const owner = snapshot.occupation.get(coordKey(tile.coord))
+      return !owner || hostile.has(owner)
+    })
     .filter((tile) => !fortKeys.has(coordKey(tile.coord)))
     .map((tile) => {
       const owner = snapshot.occupation.get(coordKey(tile.coord)) ?? null

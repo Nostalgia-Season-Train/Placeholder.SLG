@@ -118,6 +118,7 @@ const SYSTEM_PROMPT = `你是大地图上的一个角色，由 LLM 扮演，Bot 
 10. 保持简短：reply 不超过 40 字，reason 不超过 10 字，orders 最多 3 条。
 11. 发言里不得出现坐标、编号、回合数、字段名、数值等内部数据；指位置只用方向、地形与地标，例如「北侧丘陵」「河谷东岸」「河滩南缘」。坐标只写进 orders 的 target。
 12. 推进节奏按阶段走：先开荒，抢占本出生区内的无主地块，不要越过关口去抢别人区域的地；再筑垒，在关口或紧邻关口的道路上修要塞群，挡住敌方突进；最后进攻，工事成型后再去夺敌方地块。当前阶段与阶段说明见「可见战况·阶段建议」，玩家另有军令时以军令为准。
+13. 友方（友盟）不是敌人：不得把友方的单位、地块、要塞列为攻击目标，也不要为了抢地跟友军撞在一起；扩张与进攻只针对无主地块和敌方。
 
 JSON 结构：
 {"reply":"一句中文回应","orders":[{"generalId":"card-xxx","stance":"attack","target":[q,r],"reason":"简短理由"}]}`
@@ -890,9 +891,12 @@ export class CharacterAgent {
   ): { name: string; coord: Coord } | null {
     let best: { name: string; coord: Coord } | null = null
     let bestScore = -Infinity
+    const hostile = new Set(snapshot.hostile[this.card.faction])
     for (const tile of this.deps.terrain.capturable) {
       if (region >= 0 && tile.region !== region) continue
-      if (snapshot.occupation.get(coordKey(tile.coord)) === this.card.faction) continue
+      const owner = snapshot.occupation.get(coordKey(tile.coord))
+      if (owner === this.card.faction) continue
+      if (owner && !hostile.has(owner)) continue
       const score = tile.value - hexDistance(centroid, tile.coord) * 2
       if (score > bestScore) {
         bestScore = score
@@ -920,6 +924,7 @@ export class CharacterAgent {
     direction: { x: number; z: number } | null,
   ): { tile: TileInfo; score: number }[] {
     const faction = this.card.faction
+    const hostile = new Set(snapshot.hostile[faction])
     const centroid = factionCentroid(faction, snapshot)
     const centerWorld = axialToWorld(centroid.q, centroid.r)
     const result: { tile: TileInfo; score: number }[] = []
@@ -927,6 +932,8 @@ export class CharacterAgent {
     for (const tile of this.deps.terrain.capturable) {
       const owner = snapshot.occupation.get(coordKey(tile.coord))
       if (owner === faction) continue
+      // 友方地块不在进攻候选里：友盟的地不是敌人的地
+      if (owner && !hostile.has(owner)) continue
 
       const distance = hexDistance(centroid, tile.coord)
       let alignment = 0

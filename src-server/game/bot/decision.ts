@@ -27,6 +27,7 @@ export function chooseTarget(
   random: () => number,
   exclude: Set<string> = new Set(),
   homeRegion = -1,
+  hostile: Set<Faction> = new Set(),
 ): TargetChoice | null {
   // 先只在本出生区内挑地，本区无地可占时再放开关口，避免开局被派去别人区域
   const inRegion = homeRegion >= 0 ? pickBestInRegion(true) : null
@@ -47,6 +48,8 @@ export function chooseTarget(
       if (exclude.has(key)) continue
       const owner = occupation.get(key)
       if (owner === general.faction) continue
+      // 友方地块不抢：只在中立与敌方地块之间选目标
+      if (owner && !hostile.has(owner)) continue
 
       const distance = hexDistance(general.coord, tile.coord)
       if (distance === 0) continue

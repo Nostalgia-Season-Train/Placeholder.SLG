@@ -653,6 +653,7 @@ export class GameRuntime {
       worldVersion: this.worldVersion,
       snapshot: {
         round: snapshot.round,
+        hostile: snapshot.hostile,
         generals: snapshot.generals,
         minions: snapshot.minions,
         forts: snapshot.forts,
