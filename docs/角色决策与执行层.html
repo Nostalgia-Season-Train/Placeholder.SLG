@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>角色决策与执行层</title>
+<style>
+  :root {
+    --bg: #0d1014;
+    --panel: #151a20;
+    --panel-2: #1b222a;
+    --line: #2b333d;
+    --line-strong: #3d4854;
+    --text: #d9e0e8;
+    --muted: #8b97a5;
+    --gold: #d8b45a;
+    --green: #63c48b;
+    --blue: #5aa9e6;
+    --red: #e06c6c;
+    --purple: #a98be0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: radial-gradient(1200px 640px at 50% -10%, #1a2129 0%, var(--bg) 62%);
+    color: var(--text);
+    font: 15px/1.7 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 56px 32px 88px; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 26px; }
+  header .kicker {
+    font-size: 12px; letter-spacing: .22em; color: var(--gold); text-transform: uppercase;
+  }
+  h1 { font-size: 32px; line-height: 1.25; margin: 10px 0 12px; font-weight: 700; }
+  header p { margin: 0; color: var(--muted); max-width: 880px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .chip {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    background: var(--panel-2); border-radius: 999px; padding: 3px 12px;
+  }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend b { color: var(--text); font-weight: 600; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .sw.gold { background: var(--gold); }
+  .sw.blue { background: var(--blue); }
+  .sw.purple { background: var(--purple); }
+  .sw.green { background: var(--green); }
+  .sw.red { background: var(--red); }
+  .sw.neutral { background: var(--panel-2); border: 1px solid var(--line-strong); }
+
+  section { margin-top: 46px; }
+  h2 { font-size: 22px; margin: 0 0 4px; display: flex; align-items: center; gap: 12px; }
+  h2 i {
+    font-style: normal; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--gold); color: #16191d; font-size: 13px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13.5px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .panel h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--text); }
+  .panel h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
+
+  .diagram { width: 100%; height: auto; display: block; }
+  .diagram text { font-family: inherit; }
+  .st-box { fill: var(--panel-2); stroke: var(--line-strong); stroke-width: 1.4; }
+  .st-box.cmd { stroke: rgba(90, 169, 230, .7); }
+  .st-box.decide { stroke: rgba(216, 180, 90, .7); }
+  .st-box.act { stroke: rgba(99, 196, 139, .7); }
+  .st-box.rest { stroke: rgba(224, 108, 108, .7); }
+  .st-box.fight { stroke: rgba(169, 139, 224, .7); }
+  .st-box.fort { stroke: rgba(99, 196, 139, .7); }
+  .st-box.gold { stroke: rgba(216, 180, 90, .75); }
+  .st-box.blue { stroke: rgba(90, 169, 230, .75); }
+  .st-box.purple { stroke: rgba(169, 139, 224, .75); }
+  .st-box.green { stroke: rgba(99, 196, 139, .75); }
+  .st-name { font-size: 14px; font-weight: 600; fill: var(--text); text-anchor: middle; }
+  .st-name.l { text-anchor: start; }
+  .st-en { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+  .st-en.l { text-anchor: start; }
+  .st-flow { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .st-flow.back { stroke: var(--gold); stroke-opacity: .85; }
+  .st-flow.main { stroke: var(--gold); }
+  .st-flow.dashed { stroke-dasharray: 5 4; }
+  .st-label { font-size: 11.5px; fill: var(--muted); }
+  .st-label.mid { text-anchor: middle; }
+  .st-label.end { text-anchor: end; }
+  .st-pill { fill: var(--panel-2); stroke: var(--line-strong); stroke-dasharray: 4 3; stroke-width: 1.2; }
+  .st-boundary { fill: none; stroke: var(--line-strong); stroke-dasharray: 6 5; }
+
+  .note { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
+  .note b { color: var(--text); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead th {
+    text-align: left; font-weight: 600; color: var(--muted); font-size: 12px;
+    letter-spacing: .08em; padding: 0 12px 10px; border-bottom: 1px solid var(--line-strong);
+  }
+  tbody td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.state { white-space: nowrap; color: var(--gold); font-weight: 600; }
+  td.state span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  td.key { white-space: nowrap; color: var(--gold); font-weight: 600; }
+  td.reuse { color: var(--green); }
+  td.add { color: var(--purple); }
+  td:first-child, thead th:first-child { padding-left: 2px; }
+  td:last-child, thead th:last-child { padding-right: 2px; }
+
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; color: var(--blue); }
+
+  pre {
+    background: #10151a; border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 20px; overflow-x: auto; margin: 0;
+    font: 12.5px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: #c9d4e0;
+  }
+  pre b { color: var(--gold); font-weight: 600; }
+  pre i { color: var(--muted); font-style: normal; }
+
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; border-top: 2px solid var(--line-strong);
+  }
+  .card.cmd { border-top-color: var(--blue); }
+  .card.decide { border-top-color: var(--gold); }
+  .card.act { border-top-color: var(--green); }
+  .card h4 { margin: 0 0 4px; font-size: 14px; }
+  .card .who { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .card p { margin: 0; font-size: 13px; color: var(--text); }
+
+  .triggers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .trigger { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .trigger h4 { margin: 0 0 4px; font-size: 13.5px; }
+  .trigger .tag { font-size: 11px; color: var(--gold); letter-spacing: .06em; }
+  .trigger p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
+
+  .keyline {
+    margin-top: 4px; padding: 14px 18px; border-radius: 10px;
+    background: rgba(216, 180, 90, .08); border: 1px solid rgba(216, 180, 90, .25);
+    font-size: 13.5px;
+  }
+  .keyline b { color: var(--gold); }
+
+  footer { margin-top: 52px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+
+  @media (max-width: 900px) {
+    .page { padding: 40px 20px 64px; }
+    h1 { font-size: 26px; }
+    .cards, .triggers { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="kicker">角色系统 · 决策与执行</div>
+  <h1>角色决策与执行层：一个决策层，两种玩法壳</h1>
+  <p>
+    角色系统把「想做什么」和「怎么做到」分开：决策层每回合产出一句话和一份订单，
+    执行层用状态机把订单走完。大地图与 RPG 只更换执行壳，决策、频道、记忆与存档照旧。
+  </p>
+  <div class="chips">
+    <span class="chip">三层控制</span>
+    <span class="chip">订单即接口</span>
+    <span class="chip">确定性推进</span>
+    <span class="chip">决策回退链</span>
+    <span class="chip">SLG 执行壳</span>
+    <span class="chip">RPG 执行壳</span>
+  </div>
+  <div class="legend">
+    <span><i class="sw gold"></i><b>决策</b> 与回退</span>
+    <span><i class="sw blue"></i><b>指令</b> 订单写入</span>
+    <span><i class="sw green"></i><b>执行</b> 状态机推进</span>
+    <span><i class="sw purple"></i><b>战斗</b> 结算</span>
+    <span><i class="sw red"></i><b>休整</b> 与撤退</span>
+  </div>
+</header>
+
+<section>
+  <h2><i>1</i>统一模型</h2>
+  <p class="sub">无论跑在大地图还是 RPG，角色都只走「触发 → 决策 → 订单 → 执行」这一条链。</p>
+
+  <div class="panel">
+    <h3>三层控制架构</h3>
+    <div class="cards">
+      <div class="card cmd">
+        <h4>指挥层</h4>
+        <div class="who">盟主（玩家或 LLM）</div>
+        <p>提出方向、目标与要求，作用是改变决策层的输入，不直接改指令。</p>
+      </div>
+      <div class="card decide">
+        <h4>决策层</h4>
+        <div class="who">LLM + 角色属性</div>
+        <p>以角色身份理解局势，产出「一句话发言 + 若干条订单」，每个角色每回合至多一次。</p>
+      </div>
+      <div class="card act">
+        <h4>执行层</h4>
+        <div class="who">Bot 状态机</div>
+        <p>寻路、逐格移动、占领、遭遇战、筑垒、休整，严格按订单执行，不做战略判断。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>一条链路，两个壳 <small>执行层是可替换的，决策层不感知场景</small></h3>
+    <svg class="diagram" viewBox="0 0 1100 480" role="img" aria-label="角色决策与执行层总览">
+      <defs>
+        <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-pill" x="440" y="20" width="220" height="48" rx="24" />
+      <text class="st-name" x="550" y="49">指挥层 · 玩家 / 盟主</text>
+
+      <path class="st-flow" d="M 550 68 V 104" marker-end="url(#arw)" />
+      <text class="st-label" x="562" y="92">提出方向 · 下达军令</text>
+
+      <rect class="st-box decide" x="280" y="108" width="540" height="112" rx="10" />
+      <text class="st-name l" x="300" y="138">决策层</text>
+      <text class="st-en l" x="300" y="160">LLM + 角色属性 · 触发排期 · 上下文组装</text>
+      <text class="st-en l" x="300" y="180">失败回退模拟层 · 结果带来源与耗时</text>
+      <text class="st-en l" x="300" y="200">输出：一句话发言 + 一份订单</text>
+
+      <path class="st-flow main" d="M 550 220 V 252" marker-end="url(#arw)" />
+      <text class="st-label" x="562" y="240">订单：姿态 + 目标</text>
+
+      <rect class="st-box act" x="280" y="256" width="250" height="110" rx="10" />
+      <text class="st-name l" x="300" y="286">执行壳 A</text>
+      <text class="st-en l" x="300" y="308">大地图 Bot</text>
+      <text class="st-en l" x="300" y="328">行军 · 占领 · 交战 · 筑垒</text>
+
+      <rect class="st-box act" x="570" y="256" width="250" height="110" rx="10" />
+      <text class="st-name l" x="590" y="286">执行壳 B</text>
+      <text class="st-en l" x="590" y="308">RPG 探索 / 战斗</text>
+      <text class="st-en l" x="590" y="328">移动 · 交互 · 明雷 · 回合</text>
+
+      <path class="st-flow" d="M 405 366 V 400" marker-end="url(#arw)" />
+      <path class="st-flow" d="M 695 366 V 400" marker-end="url(#arw)" />
+
+      <rect class="st-box" x="280" y="404" width="540" height="56" rx="10" />
+      <text class="st-name l" x="300" y="428">世界状态</text>
+      <text class="st-en l" x="300" y="448">地块 · 单位 · 队伍 · 进度 · 频道 · 存档</text>
+    </svg>
+    <div class="note">
+      新增玩法只需要再写一个执行壳：决策层与订单格式不动，频道、记忆与存档也不用改。
+      反过来，换掉决策层（真实 LLM、模拟层、未来的本地模型）同样不影响执行壳。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>2</i>订单即接口</h2>
+  <p class="sub">决策层只说「要做什么」，执行层决定「一步步怎么走」。</p>
+
+  <div class="panel">
+    <h3>订单的形态 <small>大地图订单为现有实现，RPG 订单为扩展计划</small></h3>
+    <pre><i>// 大地图：现有</i>
+{ generalId, stance: 'attack' | 'defend' | 'hold' | 'retreat' | 'buildFortress' | 'auto', target }
+
+<i>// RPG：扩展，靠 scene 判别，两个执行器各认各的</i>
+type <b>RpgOrder</b> =
+  | { scene: 'explore'; unitId: string; stance: 'follow' | 'scout' | 'interact' | 'hold' | 'retreat'; target: Coord | null }
+  | { scene: 'battle';  unitId: string; stance: 'attack' | 'skill' | 'guard' | 'boost' | 'flee'; targetId: string | null; boost: number }</pre>
+    <div class="note">
+      订单只描述「姿态 + 目标」，<b>不含逐格路径</b>。战斗里的 <code>boost</code> 是 BP 消耗（0–3），
+      LLM 只决定加几点，能不能加、加完打几下由战斗执行器校验。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>介入边界</h3>
+    <table>
+      <thead>
+        <tr><th>项</th><th>规则</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="state">介入点</td><td>只有一个：<code>sim.setOrder()</code>。LLM 给的是「姿态 + 目标」，不是逐格路径</td></tr>
+        <tr><td class="state">姿态</td><td>attack / defend / hold / retreat / buildFortress / auto，决定下一 Tick 走向哪条状态分支</td></tr>
+        <tr><td class="state">寻路</td><td>不介入：A* 由执行层计算，自动绕开不可通行地形与敌方已建成要塞</td></tr>
+        <tr><td class="state">移动与占领</td><td>不介入：逐格移动、地形耗时、占领进度全部由 <code>sim.step()</code> 推进</td></tr>
+        <tr><td class="state">战斗</td><td>不介入：同格或相邻即自动交战，普攻、伤害浮动与胜负结算不询问 LLM</td></tr>
+        <tr><td class="state">工事与资源</td><td>不介入：建造进度、拆要塞、扣料与补兵计费由推演层结算；资源不足只回传信号</td></tr>
+        <tr><td class="state">发言</td><td>只写文本：<code>reply</code> 进对应频道，受每频道每回合 1 条配额限制</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="keyline">
+    <b>推进权留在世界回合循环</b>：状态机不在角色协程里跑，保证寻路与遭遇战的随机数消费顺序不随协程调度漂移，
+    同一存档可复现同一战报。
+  </div>
+</section>
+
+<section>
+  <h2><i>3</i>决策层：什么时候决策</h2>
+  <p class="sub">决策不是每 Tick 都发生，而是由触发条件放行。</p>
+
+  <div class="panel">
+    <h3>触发时机</h3>
+    <div class="triggers">
+      <div class="trigger">
+        <h4>玩家发言</h4>
+        <div class="tag">最高优先级</div>
+        <p>立即唤醒、不等回合边界，令牌队列插到队首；不计入发言配额。</p>
+      </div>
+      <div class="trigger">
+        <h4>关键点</h4>
+        <div class="tag">局势变化</div>
+        <p>遭遇战、占领成功、战败、行军受阻、失地、要塞失守；距上次不少于 20 回合，期间合并。</p>
+      </div>
+      <div class="trigger">
+        <h4>随机时间</h4>
+        <div class="tag">自主决策</div>
+        <p>开启自动决策时生效，基准间隔的 0.5 ~ 1.5 倍随机，各角色独立排期。</p>
+      </div>
+      <div class="trigger">
+        <h4>世界发言</h4>
+        <div class="tag">仅发言人</div>
+        <p>每同盟按职位选一名发言人，约 20 回合一次；只出声，不下指令。</p>
+      </div>
+    </div>
+    <div class="note">
+      RPG 沿用同一套排期，只把关键点种类换成遇敌、濒死、队友倒下与剧情节点。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>介入链路 <small>每 Tick 闭环，LLM 只在环上走一步</small></h3>
+    <svg class="diagram" viewBox="0 0 1120 460" role="img" aria-label="LLM 介入链路">
+      <defs>
+        <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+        </marker>
+        <marker id="arrow-gold" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#d8b45a" />
+        </marker>
+      </defs>
+
+      <rect class="st-box act" x="460" y="48" width="200" height="64" rx="10" />
+      <text class="st-name" x="560" y="76">世界回合循环</text>
+      <text class="st-en" x="560" y="94">advance() · sim.step()</text>
+
+      <rect class="st-box decide" x="830" y="198" width="200" height="64" rx="10" />
+      <text class="st-name" x="930" y="226">判定是否决策</text>
+      <text class="st-en" x="930" y="244">claimTrigger()</text>
+
+      <rect class="st-box decide" x="630" y="348" width="200" height="64" rx="10" />
+      <text class="st-name" x="730" y="376">组装上下文</text>
+      <text class="st-en" x="730" y="394">buildActorContext()</text>
+
+      <rect class="st-box decide" x="270" y="348" width="200" height="64" rx="10" />
+      <text class="st-name" x="370" y="376">LLM / 模拟 LLM</text>
+      <text class="st-en" x="370" y="394">输出 { reply, orders }</text>
+
+      <rect class="st-box cmd" x="70" y="198" width="200" height="64" rx="10" />
+      <text class="st-name" x="170" y="226">写指令</text>
+      <text class="st-en" x="170" y="244">applyOrders() · setOrder()</text>
+
+      <rect class="st-pill" x="850" y="316" width="220" height="46" rx="23" />
+      <text class="st-label mid" x="960" y="336">玩家发言 · 关键点</text>
+      <text class="st-label mid" x="960" y="352">随机时间 · 世界发言</text>
+
+      <path class="st-flow" d="M 660 92 L 828 200" marker-end="url(#arrow2)" />
+      <text class="st-label" x="720" y="112">广播回合号，RoundGate 放行</text>
+
+      <path class="st-flow" d="M 880 262 L 800 348" marker-end="url(#arrow2)" />
+      <text class="st-label end" x="845" y="318">按优先级判定</text>
+
+      <path class="st-flow dashed" d="M 960 316 V 262" marker-end="url(#arrow2)" />
+      <text class="st-label" x="968" y="292">触发</text>
+
+      <path class="st-flow" d="M 630 380 H 478" marker-end="url(#arrow2)" />
+      <text class="st-label mid" x="554" y="370">自身上下文 + 环境上下文</text>
+
+      <path class="st-flow" d="M 270 380 L 172 262" marker-end="url(#arrow2)" />
+      <text class="st-label" x="190" y="330">超时 / 解析失败</text>
+      <text class="st-label" x="190" y="344">回退模拟 LLM</text>
+
+      <path class="st-flow back" d="M 170 198 L 458 100" marker-end="url(#arrow-gold)" />
+      <text class="st-label mid" x="310" y="150">下一 Tick 由 Bot 接管</text>
+    </svg>
+    <div class="note">
+      世界回合循环每 Tick 推进一次；角色协程只在回合边界被放行，判定该不该决策，再组装上下文并调用 LLM。
+      订单写入单位后，下一个 Tick 由执行层接管，形成闭环。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>决策契约 <small>真实层与模拟层输出同一结构</small></h3>
+    <pre>interface <b>DecisionRequest</b> {
+  kind: 'dialogue' | 'explore' | 'battle' | 'advice'
+  actorId: string
+  context: unknown        <i>// 各场景的上下文组装器生成，只换内容不换结构</i>
+  deadlineMs: number      <i>// 本次调用允许等待的上限</i>
+  epoch: number           <i>// 世界回合 / 战斗回合，用于丢弃迟到结果</i>
+}
+
+interface <b>Decision&lt;T&gt;</b> {
+  payload: T              <i>// { reply, orders }，与现有 ActorDecision 同形</i>
+  source: 'llm' | 'mock'
+  latencyMs: number
+  fallbackReason?: 'timeout' | 'network' | 'http' | 'invalid' | 'circuit'
+  raw?: string            <i>// 真实层原始输出，便于事后对比</i>
+}</pre>
+    <div class="note">
+      输出仍然只有「说什么 + 下达什么指令」。数值、伤害、命中一律由执行层结算，
+      决策层既看不到也改不了。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>4</i>决策层：失败如何回退</h2>
+  <p class="sub">回退链包在 LLM 调用外面，执行层完全无感：拿到的永远是同一份订单。</p>
+
+  <div class="panel">
+    <h3>触发条件与处理 <small>默认策略，均可在运行时调整</small></h3>
+    <table>
+      <thead>
+        <tr><th>触发</th><th>判定</th><th>处理</th><th>影响范围</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="key">超时</td>
+          <td>超过 <code>deadlineMs</code> 仍未返回</td>
+          <td>中止请求，立即用模拟结果</td>
+          <td>本次调用</td>
+        </tr>
+        <tr>
+          <td class="key">网络 / 服务错误</td>
+          <td>DNS、连接重置、429、5xx、CORS 被拒</td>
+          <td>回退并计入熔断失败次数</td>
+          <td>本次调用 + 健康统计</td>
+        </tr>
+        <tr>
+          <td class="key">配置错误</td>
+          <td>401 / 403、模型不存在</td>
+          <td>回退并持续降级，提示检查设置</td>
+          <td>该配置修订前</td>
+        </tr>
+        <tr>
+          <td class="key">输出非法</td>
+          <td>解析失败、缺字段、动作不可用</td>
+          <td>先尝试一次修复，仍失败则回退</td>
+          <td>非法单位或整份决策</td>
+        </tr>
+        <tr>
+          <td class="key">熔断打开</td>
+          <td>窗口内失败达到阈值</td>
+          <td>跳过真实层，直接走模拟</td>
+          <td>冷却窗口内的全部调用</td>
+        </tr>
+        <tr>
+          <td class="key">结果过期</td>
+          <td>返回时 <code>epoch</code> 已变化</td>
+          <td>丢弃结果，不回写状态</td>
+          <td>本次调用</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note">
+      现有实现只在角色层做「失败后冷却 3 回合」，粒度粗且每次都要先等超时。RPG 的决策层把这些判断收在一处。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>超时预算 <small>截止时间就是玩家可见的最长等待；到点必回退</small></h3>
+    <table>
+      <thead>
+        <tr><th>场景</th><th>默认截止</th><th>可调范围</th><th>理由</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">对话回复</td><td>6s</td><td>3–10s</td><td>玩家在读字，容忍度较高</td></tr>
+        <tr><td class="key">探索指令</td><td>3s</td><td>1–8s</td><td>角色自己的节奏，玩家不等，超时照常推进</td></tr>
+        <tr><td class="key">战斗指挥</td><td>2s</td><td>1–5s</td><td>玩家在等这一回合，必须快</td></tr>
+        <tr><td class="key">战前 / 战后建议</td><td>3s</td><td>1–8s</td><td>异步补充，超时直接出模板</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      战斗指挥的等待发生在<b>决策门</b>，地图动画与已有战斗日志照常刷新，不阻塞推演循环。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>熔断状态机</h3>
+    <div class="cards">
+      <div class="card">
+        <h4>关闭</h4>
+        <div class="who">closed</div>
+        <p>正常调用真实 LLM；成功即清零失败计数。</p>
+      </div>
+      <div class="card">
+        <h4>打开</h4>
+        <div class="who">open · 默认 30s</div>
+        <p>窗口内失败达到 3 次后打开，期间全部请求直接走模拟层。</p>
+      </div>
+      <div class="card">
+        <h4>半开</h4>
+        <div class="who">half-open</div>
+        <p>冷却结束只放行 1 个探测请求：成功则回到关闭，失败则继续打开。</p>
+      </div>
+    </div>
+    <div class="keyline" style="margin-top: 16px;">
+      配置变更（API Key、baseUrl、模型）时<b>重置熔断状态</b>，避免修好配置后仍被旧状态挡住。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>必须守住的约束</h3>
+    <div class="cards">
+      <div class="card">
+        <h4>不阻塞协程</h4>
+        <div class="who">actor / runtime</div>
+        <p>只在决策门等待，世界回合、地图动画与渲染保持运行。</p>
+      </div>
+      <div class="card">
+        <h4>真中止请求</h4>
+        <div class="who">AbortController</div>
+        <p>超时后取消 HTTP，而不是放任连接跑完，避免并发与费用失控。</p>
+      </div>
+      <div class="card">
+        <h4>按 epoch 丢弃</h4>
+        <div class="who">stale guard</div>
+        <p>迟到结果不得覆盖已经用兜底决策结算过的回合。</p>
+      </div>
+      <div class="card">
+        <h4>部分回退</h4>
+        <div class="who">granularity</div>
+        <p>个别单位动作非法时只替换该单位，不整份作废。</p>
+      </div>
+      <div class="card">
+        <h4>来源可观测</h4>
+        <div class="who">provenance</div>
+        <p>每次决策记录来源、耗时、回退原因与熔断状态。</p>
+      </div>
+      <div class="card">
+        <h4>模拟层确定性</h4>
+        <div class="who">mock</div>
+        <p>只用快照与回合数取模板，不引入随机，保证可复现。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>5</i>执行壳 A：大地图 Bot</h2>
+  <p class="sub"><code>GeneralState.status</code> 七个取值，每 Tick 对未锁定、未休整的单位调用一次 <code>act()</code>。</p>
+
+  <div class="panel">
+    <h3>状态图 <small>实线为常规转移，虚线为指令或打断</small></h3>
+    <svg class="diagram" viewBox="0 0 1120 470" role="img" aria-label="Bot 状态转移图">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-box act" x="160" y="158" width="130" height="64" rx="10" />
+      <text class="st-name" x="225" y="186">待命</text>
+      <text class="st-en" x="225" y="204">idle</text>
+
+      <rect class="st-box act" x="405" y="158" width="130" height="64" rx="10" />
+      <text class="st-name" x="470" y="186">行军</text>
+      <text class="st-en" x="470" y="204">marching</text>
+
+      <rect class="st-box act" x="650" y="158" width="130" height="64" rx="10" />
+      <text class="st-name" x="715" y="186">占领</text>
+      <text class="st-en" x="715" y="204">capturing</text>
+
+      <rect class="st-box act" x="885" y="158" width="130" height="64" rx="10" />
+      <text class="st-name" x="950" y="186">驻守</text>
+      <text class="st-en" x="950" y="204">garrison</text>
+
+      <rect class="st-box rest" x="160" y="358" width="130" height="64" rx="10" />
+      <text class="st-name" x="225" y="386">休整</text>
+      <text class="st-en" x="225" y="404">resting</text>
+
+      <rect class="st-box fight" x="405" y="358" width="130" height="64" rx="10" />
+      <text class="st-name" x="470" y="386">交战</text>
+      <text class="st-en" x="470" y="404">fighting</text>
+
+      <rect class="st-box fort" x="405" y="20" width="130" height="64" rx="10" />
+      <text class="st-name" x="470" y="48">筑垒施工</text>
+      <text class="st-en" x="470" y="66">buildFortress</text>
+
+      <path class="st-flow" d="M 290 190 H 398" marker-end="url(#arrow)" />
+      <text class="st-label mid" x="347" y="176">有目标（选点或指令）</text>
+
+      <path class="st-flow" d="M 535 190 H 643" marker-end="url(#arrow)" />
+      <text class="st-label mid" x="588" y="176">抵达非己方格</text>
+
+      <path class="st-flow" d="M 780 190 H 878" marker-end="url(#arrow)" />
+      <text class="st-label mid" x="828" y="176">进度达标</text>
+
+      <path class="st-flow" d="M 950 222 V 290 H 515 V 222" marker-end="url(#arrow)" />
+      <text class="st-label" x="740" y="282">无 hold 指令时重新选点</text>
+
+      <path class="st-flow" d="M 225 358 V 222" marker-end="url(#arrow)" />
+      <text class="st-label" x="235" y="300">restTurns 归零</text>
+
+      <path class="st-flow" d="M 405 390 H 290" marker-end="url(#arrow)" />
+      <text class="st-label mid" x="350" y="376">兵力归零撤退</text>
+
+      <path class="st-flow" d="M 440 358 V 222" marker-end="url(#arrow)" />
+      <text class="st-label" x="450" y="300">敌军离开 / 脱战</text>
+
+      <path class="st-flow" d="M 470 158 V 92" marker-end="url(#arrow)" />
+      <text class="st-label" x="480" y="122">站上道路 / 关口目标</text>
+      <text class="st-label" x="480" y="136">扣石料 80 + 木材 60</text>
+
+      <path class="st-flow" d="M 425 158 C 405 128 448 122 455 158" marker-end="url(#arrow)" />
+      <text class="st-label end" x="420" y="120">每 Tick 一格</text>
+
+      <path class="st-flow" d="M 535 52 H 950 V 158" marker-end="url(#arrow)" />
+      <text class="st-label end" x="940" y="112">建成（进度 18 / 12 / 8）</text>
+
+      <path class="st-flow dashed" d="M 405 52 H 225 V 158" marker-end="url(#arrow)" />
+      <text class="st-label" x="235" y="110">被打断清空</text>
+
+      <path class="st-flow dashed" d="M 715 222 V 326 H 500 V 358" marker-end="url(#arrow)" />
+      <text class="st-label mid" x="620" y="318">出现敌军</text>
+    </svg>
+
+    <div class="note">
+      待命 / 行军 / 占领 / 驻守 任一处出现同格或相邻敌军都会转入交战（休整中与 2 Tick 脱战保护期内除外）；交战锁定的单位当 Tick 不移动、不占领，只结算一次普攻。<br />
+      到达己方地块或主城格直接转驻守；主城格只由小兵破城改归属，角色不占领。<br />
+      筑垒被打断（换指令、主动撤退、战败撤退、资源不足）会清空半成品，<b>进度与已扣资源都不返还</b>。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>状态转移表</h3>
+    <table>
+      <thead>
+        <tr><th>状态</th><th>怎么进入</th><th>当 Tick 做什么 / 怎么离开</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="state">休整 <span>resting</span></td>
+          <td>战败（兵力归零）后退到相邻空格，<code>restTurns = 2</code></td>
+          <td>每 Tick 回复 15% 兵力上限，按恢复量扣粮食与黄金，不足则少回；<code>restTurns</code> 归零后按指令或重新选点</td>
+        </tr>
+        <tr>
+          <td class="state">待命 <span>idle</span></td>
+          <td>无指令、无目标，或目标失效、筑垒非法、资源不足导致指令被清空</td>
+          <td>自主选点（性格权重 + 地块价值，排除主城与要塞格）→ 行军；收到 hold 指令 → 驻守</td>
+        </tr>
+        <tr>
+          <td class="state">行军 <span>marching</span></td>
+          <td>有待执行的目标，来自订单或自主选点</td>
+          <td>逐 Tick 走一格，丘陵 / 河滩 / 关口原地多等 1 Tick；下一格是敌方已建成要塞时原地等待拆要塞</td>
+        </tr>
+        <tr>
+          <td class="state">占领 <span>capturing</span></td>
+          <td>站在目标格上，该格不属于自己、且不是主城格</td>
+          <td>每 Tick 进度 +1，达到 <code>max(2, 等级 + 1)</code> 后地块易手 → 驻守，并发出「占领」关键点</td>
+        </tr>
+        <tr>
+          <td class="state">驻守 <span>garrison</span></td>
+          <td>hold 指令；抵达己方格或主城格；占领完成；要塞建成</td>
+          <td>持 hold 指令时持续驻守；否则下一 Tick 无目标时重新选点 → 行军</td>
+        </tr>
+        <tr>
+          <td class="state">交战 <span>fighting</span></td>
+          <td>同格或相邻出现敌方单位（休整中、2 Tick 脱战保护期内除外），单位被锁定</td>
+          <td>兵力归零 → 休整；收到 retreat 指令 → 脱战退一格并获得 2 Tick 保护；敌军消失 → 解除锁定，回到原流程</td>
+        </tr>
+        <tr>
+          <td class="state">筑垒施工 <span>building</span></td>
+          <td>buildFortress 指令站上道路或关口目标，且资源足够</td>
+          <td>开工扣石料 80 + 木材 60；进度达到 18 / 12 / 8 建成 → 驻守；被打断则清空</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2><i>6</i>执行壳 B：RPG 探索与战斗</h2>
+  <p class="sub">同一套「状态 + 订单 + 每回合推进」，换成方形网格与回合制战斗。以下为计划设计，尚未落代码。</p>
+
+  <div class="panel">
+    <h3>探索状态链 <small>场景内移动，遇敌切场景</small></h3>
+    <svg class="diagram" viewBox="0 0 1120 170" role="img" aria-label="RPG 探索状态链">
+      <defs>
+        <marker id="arrow3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-box act" x="30" y="26" width="170" height="64" rx="10" />
+      <text class="st-name" x="115" y="54">待命</text>
+      <text class="st-en" x="115" y="74">idle</text>
+
+      <rect class="st-box act" x="250" y="26" width="170" height="64" rx="10" />
+      <text class="st-name" x="335" y="54">行军</text>
+      <text class="st-en" x="335" y="74">moving</text>
+
+      <rect class="st-box act" x="470" y="26" width="170" height="64" rx="10" />
+      <text class="st-name" x="555" y="54">交互</text>
+      <text class="st-en" x="555" y="74">interacting</text>
+
+      <rect class="st-box fight" x="690" y="26" width="170" height="64" rx="10" />
+      <text class="st-name" x="775" y="54">遭遇</text>
+      <text class="st-en" x="775" y="74">encounter</text>
+
+      <rect class="st-box purple" x="910" y="26" width="170" height="64" rx="10" />
+      <text class="st-name" x="995" y="54">战斗场景</text>
+      <text class="st-en" x="995" y="74">battle</text>
+
+      <path class="st-flow" d="M 200 58 H 240" marker-end="url(#arrow3)" />
+      <path class="st-flow" d="M 420 58 H 460" marker-end="url(#arrow3)" />
+      <path class="st-flow" d="M 640 58 H 680" marker-end="url(#arrow3)" />
+      <path class="st-flow" d="M 860 58 H 900" marker-end="url(#arrow3)" />
+
+      <path class="st-flow dashed" d="M 995 90 V 140 H 115 V 96" marker-end="url(#arrow3)" />
+      <text class="st-label mid" x="555" y="132">战斗结束，回到遇敌位置</text>
+    </svg>
+    <div class="note">
+      探索层只管「走格子、踩触发格、进战斗」。方形网格用 4 向移动，每格耗时同大地图；
+      交互与对话期间单位不动，战斗结束回到遇敌格并给一次短暂无敌，避免立刻二次遇敌。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>战斗回合环 <small>1 回合 = 1 次行动，BP 与护盾跨回合保留</small></h3>
+    <svg class="diagram" viewBox="0 0 1120 250" role="img" aria-label="RPG 战斗回合环">
+      <defs>
+        <marker id="arrow4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-box fight" x="30" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="115" y="66">回合开始</text>
+      <text class="st-en" x="115" y="88">roundStart</text>
+
+      <rect class="st-box decide" x="245" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="330" y="66">决策与指令</text>
+      <text class="st-en" x="330" y="88">command · BP</text>
+
+      <rect class="st-box act" x="460" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="545" y="66">行动结算</text>
+      <text class="st-en" x="545" y="88">resolve</text>
+
+      <rect class="st-box fight" x="675" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="760" y="66">破防与护盾</text>
+      <text class="st-en" x="760" y="88">break · shield</text>
+
+      <rect class="st-box rest" x="890" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="975" y="66">回合结束</text>
+      <text class="st-en" x="975" y="88">roundEnd</text>
+
+      <path class="st-flow" d="M 200 74 H 235" marker-end="url(#arrow4)" />
+      <path class="st-flow" d="M 415 74 H 450" marker-end="url(#arrow4)" />
+      <path class="st-flow" d="M 630 74 H 665" marker-end="url(#arrow4)" />
+      <path class="st-flow" d="M 845 74 H 880" marker-end="url(#arrow4)" />
+
+      <path class="st-flow dashed" d="M 975 112 V 210 H 115 V 116" marker-end="url(#arrow4)" />
+      <text class="st-label mid" x="545" y="200">下一回合 · BP 保留，破防恢复护盾</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h3>两个执行器的状态对照</h3>
+    <table>
+      <thead>
+        <tr><th>执行器</th><th>状态</th><th>每回合做什么</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="state">探索</td>
+          <td>待命 / 行军 / 交互 / 遭遇 / 战斗</td>
+          <td>按订单选点并逐格移动；踩到 NPC 或物件格转入交互；明雷进入相邻格转战斗</td>
+        </tr>
+        <tr>
+          <td class="state">战斗</td>
+          <td>回合开始 / 决策与指令 / 行动结算 / 破防与护盾 / 回合结束</td>
+          <td>BP 每回合 +1（上限 5），单次最多花 3；弱点命中削盾，破防后跳过下一次行动且受伤 ×1.5</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note">
+      战斗执行器只消费订单里的「行动 + 目标 + BP 消耗」，连击次数、伤害、命中与破防判定全部由结算层决定。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>7</i>两种壳的边界</h2>
+  <p class="sub">哪些照搬、哪些只加分支、哪些必须新写，一张表定死。</p>
+
+  <div class="panel">
+    <h3>角色内核在两种壳里的位置 <small>代码先复制，src-server 一行不动</small></h3>
+    <table>
+      <thead>
+        <tr><th>能力</th><th>现有实现</th><th>RPG 里的处理</th><th>改动</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="key">角色身份</td>
+          <td><code>CharacterCardDTO</code>：描述、性格标签、对话提示词、职位、定位；落库 <code>cards.db</code></td>
+          <td>原样使用。队伍成员、村民、守卫都是角色卡，不另设 RPG 人物表；纯前端改存 IndexedDB</td>
+          <td class="reuse">无</td>
+        </tr>
+        <tr>
+          <td class="key">决策排期</td>
+          <td><code>CharacterAgent.claimTrigger</code>：玩家发言 &gt; 关键点 &gt; 随机时间 &gt; 世界发言</td>
+          <td>复制到浏览器内核，只把关键点种类换成遇敌、濒死、队友倒下、剧情节点</td>
+          <td class="reuse">复制 + 换关键点</td>
+        </tr>
+        <tr>
+          <td class="key">上下文与记忆</td>
+          <td><code>context.ts</code> 组装局势，<code>memory.ts</code> 记指令与发言，<code>channel.ts</code> 每频道留最近 10 条</td>
+          <td>记忆与频道原样复制；上下文的地图部分改写为 RPG 场景。频道语义映射：同盟 → 队伍，本团 → 核心成员，世界 → 城镇与传闻</td>
+          <td class="reuse">复制 + 频道语义映射</td>
+        </tr>
+        <tr>
+          <td class="key">LLM 调用与降级</td>
+          <td><code>agent/llm.ts</code> 的 <code>complete()</code>；<code>actor.ts</code> 捕获异常后按 <code>FAILURE_COOLDOWN</code> 冷却并调用内嵌 mock</td>
+          <td>复制 <code>fetch</code> 客户端为 <code>live.ts</code>，外面套决策层：统一的截止时间、熔断、输出校验与来源标记。默认走模拟层，密钥只存本机设置</td>
+          <td class="add">复制并增强</td>
+        </tr>
+        <tr>
+          <td class="key">执行层</td>
+          <td><code>game/bot/</code>：terrain / pathfinding / decision / simulation，六边形大地图</td>
+          <td>探索执行器按同一分层重建为方形网格；战斗执行器新写，只消费战斗指令</td>
+          <td class="add">新增两个执行器</td>
+        </tr>
+        <tr>
+          <td class="key">循环与快照</td>
+          <td><code>GameRuntime.advance</code> 推回合，SSE 推全量快照，前端只渲染</td>
+          <td>浏览器固定节拍 tick 直接推进，状态放在 <code>reactive</code> store 里，进程内读取</td>
+          <td class="add">换成浏览器循环</td>
+        </tr>
+        <tr>
+          <td class="key">运行环境</td>
+          <td>Node 单线程事件循环，每角色一个 async 协程</td>
+          <td>浏览器同一事件循环，协程照跑；复制过来的内核不依赖任何 node 模块</td>
+          <td class="reuse">复制内核，不迁服务端</td>
+        </tr>
+        <tr>
+          <td class="key">存档</td>
+          <td>node:sqlite，<code>WorldSaveDTO</code> v2 含角色排期与记忆</td>
+          <td>IndexedDB 存世界快照与角色段，设置存 localStorage；字段结构不变</td>
+          <td class="add">换存储适配层</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="keyline">
+    代码上先<b>复制、不共享</b>：RPG 全部落在 <code>src-front</code>，<code>src-server</code> 一行不动。
+    玩法跑通后如果两份内核开始漂移，再讨论是否上移到 <code>src-shared</code>。
+  </div>
+</section>
+
+<section>
+  <h2><i>8</i>落地结构</h2>
+  <p class="sub">决策层与两个执行壳在目录上彼此独立，只通过订单与契约相连。</p>
+
+  <div class="panel">
+    <h3>目录与接入点 <small>RPG 部分为计划结构，尚未落代码</small></h3>
+    <pre><b>src-server/</b>                       已有实现，不因 RPG 改动
+  game/
+    bot/                          执行壳 A：地形、寻路、决策、推演
+      terrain.ts · pathfinding.ts · decision.ts · simulation.ts
+    agent/                        决策层内核
+      actor.ts                    claimTrigger / decide / apply
+      scheduler.ts · context.ts · memory.ts · channel.ts · llm.ts
+  runtime/
+    GameRuntime.ts                advance / dispatchSignals / applyOrders
+
+<b>src-shared/</b>                      直接引用，不改
+  types.ts · protocol.ts · chat.ts
+  rpg/
+    explore.ts                   新增：方形瓦片地图、NPC、明雷遇敌
+    battle.ts                    新增：BP / 弱点 / 破防类型
+
+<b>src-front/rpg/</b>                  纯前端 RPG，全部跑在浏览器
+  agent/                         从 src-server/game/agent 复制：与地图无关的内核
+    scheduler.ts · memory.ts · channel.ts · actor.ts · context.ts
+  decision/                      新增：回退链
+    types.ts                     DecisionRequest / Decision
+    fallback.ts                  截止时间、熔断、校验、来源标记
+    live.ts                      fetch + AbortController（由 llm.ts 改造）
+    mock.ts                      模拟层，探索与战斗各一套
+    health.ts                    成功率、耗时、失败原因统计
+  explore.ts                     执行壳 B-1：方形网格寻路、跟随、交互
+  battle.ts                      执行壳 B-2：BP、弱点、破防
+  runtime.ts                     固定节拍 tick，替代 GameRuntime 与 SSE
+  store.ts                       reactive 状态与快照，渲染只读
+  storage.ts                     IndexedDB 存档、localStorage 设置
+  ui/                            探索渲染、HUD、对话面板、色块战斗</pre>
+    <div class="note">
+      复制时只带走与地图无关的部分：排期、记忆、频道、发言配额、JSON 裁剪与解析。
+      <code>context.ts</code>、<code>mockDecision</code> 里的六边形地图分支按 RPG 场景重写，不跟着复制。
+      接入真实模型时只补 <code>live.ts</code>；纯前端直接 <code>fetch</code>，需要目标 API 允许跨域。
+    </div>
+  </div>
+</section>
+
+<footer>
+  本文合并自《Bot 状态机与 LLM 介入》与《RPG 架构与 LLM 回退》，统一为「决策层 + 执行壳」的表述。<br />
+  依据代码：<code>src-server/game/bot/simulation.ts</code> 的 act() / captureTile() / followOrder() / defeat() / disengage()，
+  <code>src-server/game/agent/actor.ts</code> 的 claimTrigger() / decide() / apply()，
+  <code>src-server/runtime/GameRuntime.ts</code> 的 advance() / dispatchSignals() / applyOrders()。
+  规则文本见《角色系统/角色行动.md》。
+</footer>
+
+</div>
+</body>
+</html>
