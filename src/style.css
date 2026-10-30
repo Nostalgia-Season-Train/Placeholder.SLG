@@ -1,0 +1,61 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0e11;
+  color: #dfe7ef;
+  font: 13px/1.7 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#app canvas {
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hud-stats {
+  position: absolute;
+  left: 16px;
+  top: 14px;
+  padding: 8px 14px;
+  border: 1px solid #2b333d;
+  border-radius: 8px;
+  background: rgba(21, 26, 32, 0.85);
+  color: #9fb0c0;
+}
+
+.hud-tip {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  color: #7b8b9a;
+  line-height: 1.9;
+}
+
+.hud-tip strong {
+  color: #dfe7ef;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.hud-banner {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f0d98a;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.hud-banner.show {
+  opacity: 1;
+}
