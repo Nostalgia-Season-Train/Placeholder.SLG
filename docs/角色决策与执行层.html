@@ -167,7 +167,8 @@
   <h1>角色决策与执行层：一个决策层，两种玩法壳</h1>
   <p>
     角色系统把「想做什么」和「怎么做到」分开：决策层每回合产出一句话和一份订单，
-    执行层用状态机把订单走完。大地图与 RPG 只更换执行壳，决策、频道、记忆与存档照旧。
+    执行层用状态机把订单走完。单位分两类：角色单位一个 LLM 对一个个体，集群单位一批单位共用一个决策源。
+    大地图与 RPG 只更换执行壳，决策、频道、记忆与存档照旧。
   </p>
   <div class="chips">
     <span class="chip">三层控制</span>
@@ -176,6 +177,8 @@
     <span class="chip">决策回退链</span>
     <span class="chip">SLG 执行壳</span>
     <span class="chip">RPG 执行壳</span>
+    <span class="chip">角色单位 1:1</span>
+    <span class="chip">集群单位 1:N</span>
   </div>
   <div class="legend">
     <span><i class="sw gold"></i><b>决策</b> 与回退</span>
@@ -239,11 +242,13 @@
       <text class="st-name l" x="300" y="286">执行壳 A</text>
       <text class="st-en l" x="300" y="308">大地图 Bot</text>
       <text class="st-en l" x="300" y="328">行军 · 占领 · 交战 · 筑垒</text>
+      <text class="st-en l" x="300" y="348">角色单位 + 集群单位</text>
 
       <rect class="st-box act" x="570" y="256" width="250" height="110" rx="10" />
       <text class="st-name l" x="590" y="286">执行壳 B</text>
       <text class="st-en l" x="590" y="308">RPG 探索 / 战斗</text>
       <text class="st-en l" x="590" y="328">移动 · 交互 · 明雷 · 回合</text>
+      <text class="st-en l" x="590" y="348">角色单位 + 集群单位</text>
 
       <path class="st-flow" d="M 405 366 V 400" marker-end="url(#arw)" />
       <path class="st-flow" d="M 695 366 V 400" marker-end="url(#arw)" />
@@ -257,6 +262,28 @@
       反过来，换掉决策层（真实 LLM、模拟层、未来的本地模型）同样不影响执行壳。
     </div>
   </div>
+
+  <div class="panel">
+    <h3>两类单位 <small>一个 LLM 只该对一个角色，不能对一个单位</small></h3>
+    <table>
+      <thead>
+        <tr><th>维度</th><th>角色单位</th><th>集群单位</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">对应关系</td><td>一个角色一个 LLM，一人一份上下文</td><td>一批单位共用一个决策源，不逐个体分配 LLM</td></tr>
+        <tr><td class="key">决策来源</td><td>自己的上下文 + 记忆 + 频道历史</td><td>阵营级指令（盟主 / 同盟订单）或纯规则</td></tr>
+        <tr><td class="key">排期</td><td>进 <code>claimTrigger</code>，按玩家发言、关键点、随机时间触发</td><td>不进决策排期，随 Tick 批量推进</td></tr>
+        <tr><td class="key">订单</td><td>姿态 + 目标格，针对个体</td><td>姿态 + 目标区域，作用于整批</td></tr>
+        <tr><td class="key">寻路</td><td>逐个体 A*</td><td>共享流场或网格索引，避免逐单位寻路</td></tr>
+        <tr><td class="key">数量级</td><td>每同盟个位数</td><td>每同盟几十到上千</td></tr>
+        <tr><td class="key">失败处理</td><td>回退到该角色的模拟决策</td><td>不涉及 LLM，本身就是确定性的</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      当前实现里，角色与小兵正好对应这两类：角色有记忆、频道与排期，小兵只按规则推进。
+      扩大规模时不要把集群单位也各接一个 LLM——那是平方级的调用量与延迟，属于设计错误，而不是性能问题。
+    </div>
+  </div>
 </section>
 
 <section>
@@ -265,8 +292,11 @@
 
   <div class="panel">
     <h3>订单的形态 <small>大地图订单为现有实现，RPG 订单为扩展计划</small></h3>
-    <pre><i>// 大地图：现有</i>
+    <pre><i>// 大地图 · 角色单位：现有</i>
 { generalId, stance: 'attack' | 'defend' | 'hold' | 'retreat' | 'buildFortress' | 'auto', target }
+
+<i>// 大地图 · 集群单位：一次订单作用于整批，不对个体下指令</i>
+{ swarmId, stance: 'push' | 'hold' | 'harass' | 'retreat', area: Rect }
 
 <i>// RPG：扩展，靠 scene 判别，两个执行器各认各的</i>
 type <b>RpgOrder</b> =
@@ -286,6 +316,7 @@ type <b>RpgOrder</b> =
       </thead>
       <tbody>
         <tr><td class="state">介入点</td><td>只有一个：<code>sim.setOrder()</code>。LLM 给的是「姿态 + 目标」，不是逐格路径</td></tr>
+        <tr><td class="state">集群订单</td><td>独立入口：写入阵营级的目标区域，执行层按批推进；不产生逐单位订单，也不逐单位决策</td></tr>
         <tr><td class="state">姿态</td><td>attack / defend / hold / retreat / buildFortress / auto，决定下一 Tick 走向哪条状态分支</td></tr>
         <tr><td class="state">寻路</td><td>不介入：A* 由执行层计算，自动绕开不可通行地形与敌方已建成要塞</td></tr>
         <tr><td class="state">移动与占领</td><td>不介入：逐格移动、地形耗时、占领进度全部由 <code>sim.step()</code> 推进</td></tr>
@@ -332,6 +363,7 @@ type <b>RpgOrder</b> =
     </div>
     <div class="note">
       RPG 沿用同一套排期，只把关键点种类换成遇敌、濒死、队友倒下与剧情节点。
+      集群单位不进入这套排期，由阵营指令或规则驱动，不占用 LLM 调用配额。
     </div>
   </div>
 
@@ -684,6 +716,15 @@ interface <b>Decision&lt;T&gt;</b> {
       </tbody>
     </table>
   </div>
+
+  <div class="panel">
+    <h3>集群单位在此壳中的位置</h3>
+    <p style="margin: 0; font-size: 13.5px;">
+      小兵是典型的集群单位：不入角色排期、不产订单、每个单位没有上下文。主城每 20 Tick 为自身同盟生成 3 个小兵
+      （单同盟存活上限 15），按 Dijkstra 沿道路与关口直取敌对主城；同格或相邻即按 7 点固定伤害交战，
+      贴城每 Tick 削 8 点城防。它只共享阵营的敌对关系与目标，不共享任何个体判断。
+    </p>
+  </div>
 </section>
 
 <section>
@@ -793,6 +834,7 @@ interface <b>Decision&lt;T&gt;</b> {
     </table>
     <div class="note">
       战斗执行器只消费订单里的「行动 + 目标 + BP 消耗」，连击次数、伤害、命中与破防判定全部由结算层决定。
+      RPG 沿用同一划分：队伍成员与重要 NPC 是角色单位，成组出现的杂兵是集群单位，进战斗后按编组行动。
     </div>
   </div>
 </section>
@@ -809,6 +851,12 @@ interface <b>Decision&lt;T&gt;</b> {
       </thead>
       <tbody>
         <tr>
+          <td class="key">单位粒度</td>
+          <td>角色单位与集群单位并存，只有角色单位有 LLM 与上下文</td>
+          <td>RPG 沿用同一划分：队伍成员是角色，杂兵是集群</td>
+          <td class="reuse">无</td>
+        </tr>
+        <tr>
           <td class="key">角色身份</td>
           <td><code>CharacterCardDTO</code>：描述、性格标签、对话提示词、职位、定位；落库 <code>cards.db</code></td>
           <td>原样使用。队伍成员、村民、守卫都是角色卡，不另设 RPG 人物表；纯前端改存 IndexedDB</td>
@@ -817,7 +865,7 @@ interface <b>Decision&lt;T&gt;</b> {
         <tr>
           <td class="key">决策排期</td>
           <td><code>CharacterAgent.claimTrigger</code>：玩家发言 &gt; 关键点 &gt; 随机时间 &gt; 世界发言</td>
-          <td>复制到浏览器内核，只把关键点种类换成遇敌、濒死、队友倒下、剧情节点</td>
+          <td>复制到浏览器内核，只把关键点种类换成遇敌、濒死、队友倒下、剧情节点；集群单位不参与</td>
           <td class="reuse">复制 + 换关键点</td>
         </tr>
         <tr>
