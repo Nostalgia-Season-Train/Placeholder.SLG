@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>集群单位与指挥层</title>
+<style>
+  :root {
+    --bg: #0d1014;
+    --panel: #151a20;
+    --panel-2: #1b222a;
+    --line: #2b333d;
+    --line-strong: #3d4854;
+    --text: #d9e0e8;
+    --muted: #8b97a5;
+    --gold: #d8b45a;
+    --green: #63c48b;
+    --blue: #5aa9e6;
+    --red: #e06c6c;
+    --purple: #a98be0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: radial-gradient(1200px 640px at 50% -10%, #1a2129 0%, var(--bg) 62%);
+    color: var(--text);
+    font: 15px/1.7 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 56px 32px 88px; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 26px; }
+  header .kicker {
+    font-size: 12px; letter-spacing: .22em; color: var(--gold); text-transform: uppercase;
+  }
+  h1 { font-size: 32px; line-height: 1.25; margin: 10px 0 12px; font-weight: 700; }
+  header p { margin: 0; color: var(--muted); max-width: 880px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .chip {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    background: var(--panel-2); border-radius: 999px; padding: 3px 12px;
+  }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend b { color: var(--text); font-weight: 600; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .sw.gold { background: var(--gold); }
+  .sw.blue { background: var(--blue); }
+  .sw.purple { background: var(--purple); }
+  .sw.green { background: var(--green); }
+  .sw.red { background: var(--red); }
+  .sw.neutral { background: var(--panel-2); border: 1px solid var(--line-strong); }
+
+  section { margin-top: 46px; }
+  h2 { font-size: 22px; margin: 0 0 4px; display: flex; align-items: center; gap: 12px; }
+  h2 i {
+    font-style: normal; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--gold); color: #16191d; font-size: 13px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13.5px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .panel h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--text); }
+  .panel h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
+
+  .diagram { width: 100%; height: auto; display: block; }
+  .diagram text { font-family: inherit; }
+  .st-box { fill: var(--panel-2); stroke: var(--line-strong); stroke-width: 1.4; }
+  .st-box.cmd { stroke: rgba(90, 169, 230, .7); }
+  .st-box.decide { stroke: rgba(216, 180, 90, .7); }
+  .st-box.act { stroke: rgba(99, 196, 139, .7); }
+  .st-box.rest { stroke: rgba(224, 108, 108, .7); }
+  .st-box.fight { stroke: rgba(169, 139, 224, .7); }
+  .st-name { font-size: 14px; font-weight: 600; fill: var(--text); text-anchor: middle; }
+  .st-name.l { text-anchor: start; }
+  .st-en { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+  .st-en.l { text-anchor: start; }
+  .st-flow { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .st-flow.main { stroke: var(--gold); }
+  .st-flow.dashed { stroke-dasharray: 5 4; }
+  .st-label { font-size: 11.5px; fill: var(--muted); }
+  .st-label.mid { text-anchor: middle; }
+  .st-pill { fill: var(--panel-2); stroke: var(--line-strong); stroke-dasharray: 4 3; stroke-width: 1.2; }
+
+  .note { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 13px; }
+  .note b { color: var(--text); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  thead th {
+    text-align: left; font-weight: 600; color: var(--muted); font-size: 12px;
+    letter-spacing: .08em; padding: 0 12px 10px; border-bottom: 1px solid var(--line-strong);
+  }
+  tbody td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.key { white-space: nowrap; color: var(--gold); font-weight: 600; }
+  td.state { white-space: nowrap; color: var(--gold); font-weight: 600; }
+  td.state span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  td.reuse { color: var(--green); }
+  td.add { color: var(--purple); }
+  td:first-child, thead th:first-child { padding-left: 2px; }
+  td:last-child, thead th:last-child { padding-right: 2px; }
+
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; color: var(--blue); }
+
+  pre {
+    background: #10151a; border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 20px; overflow-x: auto; margin: 0;
+    font: 12.5px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: #c9d4e0;
+  }
+  pre b { color: var(--gold); font-weight: 600; }
+  pre i { color: var(--muted); font-style: normal; }
+
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; border-top: 2px solid var(--line-strong);
+  }
+  .card.cmd { border-top-color: var(--blue); }
+  .card.decide { border-top-color: var(--gold); }
+  .card.act { border-top-color: var(--green); }
+  .card h4 { margin: 0 0 4px; font-size: 14px; }
+  .card .who { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .card p { margin: 0; font-size: 13px; color: var(--text); }
+
+  .keyline {
+    margin-top: 4px; padding: 14px 18px; border-radius: 10px;
+    background: rgba(216, 180, 90, .08); border: 1px solid rgba(216, 180, 90, .25);
+    font-size: 13.5px;
+  }
+  .keyline b { color: var(--gold); }
+
+  footer { margin-top: 52px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+
+  @media (max-width: 900px) {
+    .page { padding: 40px 20px 64px; }
+    h1 { font-size: 26px; }
+    .cards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="kicker">角色系统 · 集群单位</div>
+  <h1>集群单位：单兵 Bot 与集群指挥 Bot</h1>
+  <p>
+    集群单位是成批存在、没有独立上下文的单位。它分两层：集群指挥 Bot 维护区域级态势、下达集群订单；
+    单兵 Bot 只做局部感知与逐格执行。LLM 最多指挥一个集群，不会也不该逐单位下指令。
+  </p>
+  <div class="chips">
+    <span class="chip">1:N 批量</span>
+    <span class="chip">单兵 Bot</span>
+    <span class="chip">集群指挥 Bot</span>
+    <span class="chip">聚合上下文</span>
+    <span class="chip">流场移动</span>
+    <span class="chip">确定性推进</span>
+  </div>
+  <div class="legend">
+    <span><i class="sw gold"></i><b>集群指挥</b> 区域与订单</span>
+    <span><i class="sw blue"></i><b>上层意图</b> 来自角色或盟主</span>
+    <span><i class="sw green"></i><b>单兵</b> 局部执行</span>
+    <span><i class="sw purple"></i><b>交战</b> 与攻城</span>
+    <span><i class="sw red"></i><b>撤退</b> 与消亡</span>
+  </div>
+</header>
+
+<section>
+  <h2><i>1</i>集群是什么</h2>
+  <p class="sub">判据只有一条：有没有独立上下文。没有，就是集群。</p>
+
+  <div class="panel">
+    <h3>与角色单位的边界</h3>
+    <table>
+      <thead>
+        <tr><th>维度</th><th>角色单位</th><th>集群单位</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">对应关系</td><td>一个角色一个 LLM，一人一份上下文</td><td>一批单位共用一个决策源，不逐个体分配 LLM</td></tr>
+        <tr><td class="key">决策来源</td><td>自己的上下文 + 记忆 + 频道历史</td><td>集群指挥 Bot：规则或单个 LLM，输入是聚合态势</td></tr>
+        <tr><td class="key">排期</td><td>进 <code>claimTrigger</code>，按玩家发言、关键点、随机时间触发</td><td>按 Tick 推进；指挥层按阶段或关键点重评估</td></tr>
+        <tr><td class="key">订单</td><td>姿态 + 目标格，针对个体</td><td>姿态 + 目标区域，作用于整批</td></tr>
+        <tr><td class="key">寻路</td><td>逐个体 A*</td><td>每同盟一张流场 + 局部避让，不逐单位寻路</td></tr>
+        <tr><td class="key">数量级</td><td>每同盟个位数</td><td>每同盟几十到上千</td></tr>
+        <tr><td class="key">记忆与频道</td><td>有记忆、会发言</td><td>无记忆、不发言，只回传聚合信号</td></tr>
+        <tr><td class="key">失败处理</td><td>回退到该角色的模拟决策</td><td>不涉及 LLM；指挥层是 LLM 时回退到规则型</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      当前实现里小兵就是集群单位：主城每 20 Tick 生成 3 个，单同盟存活上限 15，
+      不入角色排期、不产订单、每个单位没有上下文。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>2</i>两层 Bot</h2>
+  <p class="sub">指挥层看区域，单兵层看脚下；两者都用状态机，但时钟与输入完全不同。</p>
+
+  <div class="panel">
+    <h3>控制层级</h3>
+    <div class="cards">
+      <div class="card cmd">
+        <h4>上层意图</h4>
+        <div class="who">角色单位 / 盟主</div>
+        <p>只说「去哪、做什么」，例如夺取某个关口或守住某段城墙，不给路径也不给队形。</p>
+      </div>
+      <div class="card decide">
+        <h4>集群指挥 Bot</h4>
+        <div class="who">每集群一个 · 秒级</div>
+        <p>维护聚合态势，把意图分解成区域级订单，决定推进方向、分批与撤退时机。</p>
+      </div>
+      <div class="card act">
+        <h4>单兵 Bot</h4>
+        <div class="who">每单位一个 · 每 Tick</div>
+        <p>局部感知、跟随流场、避让邻居、交战与攻城；不读全局地图，不做战略判断。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>信息如何下沉 <small>意图只到区域，路径由执行层决定</small></h3>
+    <svg class="diagram" viewBox="0 0 1100 470" role="img" aria-label="集群单位的两层 Bot">
+      <defs>
+        <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L5 10 L10 5 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-box cmd" x="380" y="24" width="340" height="56" rx="10" />
+      <text class="st-name" x="550" y="50">角色单位 / 盟主</text>
+      <text class="st-en" x="550" y="68">意图：去哪、做什么</text>
+
+      <path class="st-flow" d="M 550 80 V 108" marker-end="url(#arw)" />
+      <text class="st-label" x="562" y="100">意图（不含路径）</text>
+
+      <rect class="st-box decide" x="280" y="112" width="540" height="100" rx="10" />
+      <text class="st-name l" x="300" y="142">集群指挥 Bot</text>
+      <text class="st-en l" x="300" y="164">聚合态势：兵力 · 目标区域 · 通道 · 补给</text>
+      <text class="st-en l" x="300" y="184">输出：集群订单（姿态 + 区域）</text>
+
+      <path class="st-flow" d="M 335 212 V 244" marker-end="url(#arw)" />
+      <path class="st-flow" d="M 550 212 V 244" marker-end="url(#arw)" />
+      <path class="st-flow" d="M 765 212 V 244" marker-end="url(#arw)" />
+
+      <rect class="st-box act" x="250" y="248" width="170" height="84" rx="10" />
+      <text class="st-name" x="335" y="276">单兵 Bot ×N</text>
+      <text class="st-en" x="335" y="298">无上下文</text>
+      <text class="st-en" x="335" y="316">局部感知</text>
+
+      <rect class="st-box act" x="465" y="248" width="170" height="84" rx="10" />
+      <text class="st-name" x="550" y="276">单兵 Bot ×N</text>
+      <text class="st-en" x="550" y="298">跟随流场</text>
+      <text class="st-en" x="550" y="316">逐 Tick 移动</text>
+
+      <rect class="st-box act" x="680" y="248" width="170" height="84" rx="10" />
+      <text class="st-name" x="765" y="276">单兵 Bot ×N</text>
+      <text class="st-en" x="765" y="298">交战 / 攻城</text>
+      <text class="st-en" x="765" y="316">固定规则</text>
+
+      <path class="st-flow" d="M 335 332 V 372" marker-end="url(#arw)" />
+      <path class="st-flow" d="M 550 332 V 372" marker-end="url(#arw)" />
+      <path class="st-flow" d="M 765 332 V 372" marker-end="url(#arw)" />
+
+      <rect class="st-box" x="250" y="376" width="600" height="56" rx="10" />
+      <text class="st-name l" x="270" y="400">世界状态</text>
+      <text class="st-en l" x="270" y="420">单位位置 · 存活数 · 城防 · 聚合信号</text>
+    </svg>
+    <div class="note">
+      三个单兵方框表示同一个集群的多批单位，不是三个不同种类。集群指挥 Bot 每批只下一次区域级订单，
+      单兵自行按流场走位；纠纷由局部规则解决，不回到指挥层。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>3</i>集群指挥 Bot</h2>
+  <p class="sub">它的输入是聚合态势，输出是区域订单；不需要知道每个单兵在哪一格。</p>
+
+  <div class="panel">
+    <h3>职责</h3>
+    <table>
+      <thead>
+        <tr><th>项</th><th>负责</th><th>不负责</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">目标</td><td>选定目标区域与推进方向</td><td>逐格路径与绕障</td></tr>
+        <tr><td class="key">分批</td><td>决定几股推进、哪股佯攻、哪股留守</td><td>单个单位的站位</td></tr>
+        <tr><td class="key">时机</td><td>何时压上、何时撤退、何时补员</td><td>逐单位攻击目标选择</td></tr>
+        <tr><td class="key">补给</td><td>维持存活数与补员节奏</td><td>资源逐笔计费</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h3>两种实现 <small>规则型是默认，LLM 型只用于玩家同盟的盟主或大臣</small></h3>
+    <table>
+      <thead>
+        <tr><th>项</th><th>规则型</th><th>LLM 型</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">输入</td><td>阶段（开荒 / 筑垒 / 进攻）+ 敌方主城 + 存活数</td><td>聚合态势 + 玩家或盟主的指令</td></tr>
+        <tr><td class="key">输出</td><td>集群订单</td><td>集群订单 + 一句话发言（进同盟频道）</td></tr>
+        <tr><td class="key">触发</td><td>每 N Tick，或阶段切换</td><td>关键点 + 随机时间，与角色排期同构</td></tr>
+        <tr><td class="key">调用量</td><td>0</td><td>每集群一次，不随单位数增长</td></tr>
+        <tr><td class="key">失败</td><td>—</td><td>超时或非法输出回退规则型，订单照发</td></tr>
+        <tr><td class="key">适用</td><td>后台势力、RPG 杂兵</td><td>玩家同盟的盟主、大臣</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      LLM 型指挥 Bot 与角色单位复用同一套回退链，区别只在上下文是聚合的：
+      它看得到「这一股还剩多少人、卡在哪个关口」，看不到「某个小兵站在第几格」。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>指挥状态机 <small>集群级状态，与单兵状态无关</small></h3>
+    <svg class="diagram" viewBox="0 0 1120 250" role="img" aria-label="集群指挥状态机">
+      <defs>
+        <marker id="arw2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L5 10 L10 5 z" fill="#8b97a5" />
+        </marker>
+      </defs>
+
+      <rect class="st-box decide" x="30" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="115" y="66">集结</text>
+      <text class="st-en" x="115" y="88">assemble</text>
+
+      <rect class="st-box act" x="245" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="330" y="66">推进</text>
+      <text class="st-en" x="330" y="88">advance</text>
+
+      <rect class="st-box fight" x="460" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="545" y="66">交战</text>
+      <text class="st-en" x="545" y="88">engage</text>
+
+      <rect class="st-box fight" x="675" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="760" y="66">围城</text>
+      <text class="st-en" x="760" y="88">siege</text>
+
+      <rect class="st-box rest" x="890" y="36" width="170" height="76" rx="10" />
+      <text class="st-name" x="975" y="66">撤退 / 补员</text>
+      <text class="st-en" x="975" y="88">withdraw</text>
+
+      <path class="st-flow" d="M 200 74 H 235" marker-end="url(#arw2)" />
+      <path class="st-flow" d="M 415 74 H 450" marker-end="url(#arw2)" />
+      <path class="st-flow" d="M 630 74 H 665" marker-end="url(#arw2)" />
+      <path class="st-flow" d="M 845 74 H 880" marker-end="url(#arw2)" />
+
+      <path class="st-flow dashed" d="M 975 112 V 210 H 115 V 116" marker-end="url(#arw2)" />
+      <text class="st-label mid" x="545" y="200">任务完成或兵力回升后重新集结</text>
+    </svg>
+    <div class="note">
+      交战与围城之间可来回切换：贴城即围城，守军出城则回交战。
+      撤退分两种——订单撤退（保存兵力）与被动溃退（减员过多），都回到集结。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>4</i>集群单兵 Bot</h2>
+  <p class="sub">每个单位一个实例，但它没有记忆、没有上下文，只有状态与局部邻居。</p>
+
+  <div class="panel">
+    <h3>感知与移动</h3>
+    <table>
+      <thead>
+        <tr><th>项</th><th>做法</th><th>理由</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">感知范围</td><td>周边 1 格 + 少量邻居查询</td><td>不读全局地图，避免每单位全图扫描</td></tr>
+        <tr><td class="key">寻路</td><td>每同盟一张流场，单兵只查当前格的下降方向</td><td>千级单位共享一次计算，避免逐单位 A*</td></tr>
+        <tr><td class="key">避让</td><td>同格冲突时按规则让位（先到先得 + 随机抖动）</td><td>用局部规则替代全局调度</td></tr>
+        <tr><td class="key">节奏</td><td>每 Tick 最多走 1 格，地形耗时与角色一致</td><td>与推演节拍同频，便于快照对齐</td></tr>
+        <tr><td class="key">随机数</td><td>只从公共种子流按固定顺序取</td><td>保证同存档可复现</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h3>单兵状态机</h3>
+    <table>
+      <thead>
+        <tr><th>状态</th><th>怎么进入</th><th>当 Tick 做什么 / 怎么离开</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="state">出生 <span>spawn</span></td><td>主城按节奏生成，或补员补充</td><td>落到出生格并转入行军</td></tr>
+        <tr><td class="state">行军 <span>march</span></td><td>有目标区域</td><td>按流场走 1 格；到达区域边缘转交战或攻城</td></tr>
+        <tr><td class="state">交战 <span>engage</span></td><td>同格或相邻出现敌对单位</td><td>固定 7 点伤害，每 Tick 一次；敌军消失回到行军</td></tr>
+        <tr><td class="state">攻城 <span>siege</span></td><td>相邻敌对主城</td><td>每 Tick 削 8 点城防，归零后主城改归属并写入战报</td></tr>
+        <tr><td class="state">撤退 <span>retreat</span></td><td>集群订单撤退，或减员超过阈值</td><td>沿流场反向退回本州，转入补员</td></tr>
+        <tr><td class="state">消亡 <span>dead</span></td><td>兵力归零</td><td>回收实例，只向指挥层回传一条减员计数</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      单兵没有「休整」「筑垒」「占领」这些角色专属状态：它不会占领地块，也不修要塞；
+      主城归属只由小兵攻城改变，角色不占领主城格。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>5</i>信息流</h2>
+  <p class="sub">下行只到区域，上行只回聚合。</p>
+
+  <div class="panel">
+    <h3>上下行信号</h3>
+    <table>
+      <thead>
+        <tr><th>方向</th><th>内容</th><th>频率</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">下行</td><td>角色意图 → 集群指挥 Bot → 区域订单 → 单兵</td><td>意图变化时，或指挥层重评估时</td></tr>
+        <tr><td class="key">上行</td><td>减员、受阻、抵达区域、城防进度</td><td>单兵只报事件，指挥层聚合</td></tr>
+        <tr><td class="key">关键点</td><td>集群被全灭、目标区域易手、城防归零</td><td>聚合后上报角色单位的排期</td></tr>
+      </tbody>
+    </table>
+    <div class="keyline">
+      单兵<b>不发言、不进频道、不进任何 LLM 上下文</b>。角色看到的永远只是聚合结果，
+      这样角色上下文的大小与集群规模无关。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>6</i>规模与性能</h2>
+  <p class="sub">集群的瓶颈在推演与渲染，不在决策；逐单位 LLM 在数量上就不成立。</p>
+
+  <div class="panel">
+    <h3>实测推演耗时 <small>现有实现，未优化</small></h3>
+    <table>
+      <thead>
+        <tr><th>规模</th><th>每 Tick 耗时</th><th>主要开销</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">100</td><td>8.5ms</td><td>逐单位 A* 与距离计算</td></tr>
+        <tr><td class="key">300</td><td>30.9ms</td><td>同上，随数量平方增长</td></tr>
+        <tr><td class="key">1000</td><td>177.7ms</td><td>交战 O(n²)、全量目标扫描、逐 Bot 寻路</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      优化路径依次是：交战改网格索引消掉平方项 → 每同盟一张流场替代逐单位 A* →
+      快照改增量 → 渲染改 InstancedMesh 且只绘制视口内标签。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>7</i>落地结构</h2>
+  <p class="sub">集群与角色在目录上分开，只通过「意图」与「聚合信号」相接。</p>
+
+  <div class="panel">
+    <h3>目录 <small>规划结构，尚未落代码</small></h3>
+    <pre><b>src-server/game/swarm/</b>
+  types.ts        集群、编组、区域订单的类型
+  commander.ts    集群指挥 Bot：聚合态势 → 区域订单
+  orders.ts       规则型指挥：阶段、阈值、目标区域选择
+  unit.ts         单兵 Bot：状态机、局部感知、交战与攻城
+  flow.ts         每同盟一张流场
+  index.ts        网格索引：邻接与交战查询
+  spawn.ts        主城生成、存活上限、补员
+
+<b>src-front/</b>
+  复用 MinionLayer：小锥体 + 头顶血条 + 逐格插值动画
+
+<b>src-server/game/agent/</b>      角色单位，见《角色单位与决策层》
+  与集群只交换「意图」和「聚合信号」，不共享上下文与记忆</pre>
+    </div>
+  </section>
+
+<section>
+  <h2><i>8</i>与角色单位的接口</h2>
+
+  <div class="panel">
+    <h3>允许与禁止</h3>
+    <table>
+      <thead>
+        <tr><th>方向</th><th>规则</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="key">角色 → 集群</td><td>角色只给「目标区域 / 要做什么」，由集群指挥 Bot 转成区域订单</td></tr>
+        <tr><td class="key">集群 → 角色</td><td>只回传聚合信号与关键点，不把每个单兵写进角色上下文</td></tr>
+        <tr><td class="key">禁止</td><td>一个 LLM 逐单位下指令；集群单位进入角色频道；集群单位拥有独立记忆</td></tr>
+        <tr><td class="key">例外</td><td>剧情需要时，单个集群单位可临时升格为角色单位，但必须新分配上下文与排期</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  角色单位见《角色单位与决策层》，规则的文字来源见《角色系统/角色行动.md》。<br />
+  依据代码：<code>src-server/game/bot/simulation.ts</code> 的小兵推进、交战、攻城与回收逻辑。
+</footer>
+
+</div>
+</body>
+</html>
